@@ -426,8 +426,39 @@ async function handleTelegramUpdate(update, env) {
 async function handleNewChatMember(chatMember, bot, db) {
   const user = chatMember.new_chat_member.user;
   const chatId = chatMember.chat.id;
+  const fromUser = chatMember.from;
 
-  if (user.is_bot && user.id === chatMember.from.id) {
+  // 如果是 Bot 自己被添加到群组
+  if (user.is_bot && user.id === fromUser.id) {
+    // 发送欢迎消息
+    await bot.sendMessage(
+      chatId,
+      `👋 <b>感谢添加 OizhiBot！</b>
+
+🤖 我是智能群组验证机器人，可以帮助你:
+✅ 自动验证新成员
+✅ 检测并封禁机器人账号
+✅ 管理黑名单
+✅ 多种验证方式
+
+⚙️ <b>请授予我以下管理员权限:</b>
+• 限制用户
+• 删除消息
+• 封禁用户
+
+📝 <b>快速开始:</b>
+• /config - 查看当前配置
+• /verify_config math - 设置验证方式
+• /help - 查看所有命令
+
+🔐 <b>当前默认配置:</b>
+• 验证方式: 数学题
+• 超时时间: 5分钟
+• 自动封禁: 已开启
+
+💡 我已经开始工作了，新成员加入时会自动验证！
+      `.trim()
+    );
     return;
   }
 
@@ -436,6 +467,49 @@ async function handleNewChatMember(chatMember, bot, db) {
 
 async function handleNewMember(message, member, bot, db) {
   const chatId = message.chat.id;
+  
+  // 检查是否是 Bot 自己
+  if (member.is_bot) {
+    // 获取 Bot 自己的信息来判断
+    try {
+      const botInfo = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getMe`).then(r => r.json());
+      if (botInfo.result && member.id === botInfo.result.id) {
+        // Bot 自己被添加
+        await bot.sendMessage(
+          chatId,
+          `👋 <b>感谢添加 OizhiBot！</b>
+
+🤖 我是智能群组验证机器人，可以帮助你:
+✅ 自动验证新成员
+✅ 检测并封禁机器人账号
+✅ 管理黑名单
+✅ 多种验证方式
+
+⚙️ <b>请授予我以下管理员权限:</b>
+• 限制用户
+• 删除消息
+• 封禁用户
+
+📝 <b>快速开始:</b>
+• /config - 查看当前配置
+• /verify_config math - 设置验证方式
+• /help - 查看所有命令
+
+🔐 <b>当前默认配置:</b>
+• 验证方式: 数学题
+• 超时时间: 5分钟
+• 自动封禁: 已开启
+
+💡 我已经开始工作了，新成员加入时会自动验证！
+          `.trim()
+        );
+        return;
+      }
+    } catch (error) {
+      console.error('Error checking bot identity:', error);
+    }
+  }
+  
   await processNewMember(chatId, member, bot, db);
 }
 
@@ -594,16 +668,195 @@ async function handlePrivateMessage(message, bot, db) {
   const user = message.from;
   const text = message.text?.trim();
 
+  // 处理 /start 命令
+  if (text === '/start') {
+    await bot.sendMessage(
+      message.chat.id,
+      `👋 你好！我是 <b>OizhiBot</b> - 群组验证机器人
+
+🔐 <b>主要功能:</b>
+• 新成员智能验证（防止机器人入侵）
+• 10维度机器人检测算法
+• 自动封禁可疑账号
+• 黑名单管理
+• 多群组独立配置
+
+📖 <b>使用方法:</b>
+1️⃣ 将我添加到你的群组
+2️⃣ 授予我管理员权限:
+   • 限制用户
+   • 删除消息
+   • 封禁用户
+3️⃣ 我会自动开始工作！
+
+👥 <b>管理员命令:</b>
+• /config - 查看配置
+• /stats - 查看统计
+• /help - 完整命令列表
+
+🔍 <b>检测用户:</b>
+直接转发用户消息给我，我会分析该用户是否可疑
+
+💡 <b>提示:</b> 当你加入需要验证的群组时，我会在这里发送验证消息
+
+📦 开源地址: https://github.com/ovws/oizhibot
+      `.trim()
+    );
+    return;
+  }
+
+  // 处理 /help 命令
+  if (text === '/help') {
+    await bot.sendMessage(
+      message.chat.id,
+      `📚 <b>帮助文档</b>
+
+<b>1. 群组管理员命令:</b>
+• /config - 查看当前配置
+• /verify_config &lt;类型&gt; - 设置验证方式
+• /verify_timeout &lt;秒&gt; - 设置超时时间
+• /autoban &lt;on|off&gt; - 自动封禁开关
+• /blacklist - 查看黑名单
+• /ban &lt;用户ID&gt; - 封禁用户
+• /unban &lt;用户ID&gt; - 解除封禁
+• /stats - 查看统计
+
+<b>2. 私聊功能:</b>
+• /start - 查看介绍
+• /check - 检测自己账号
+• 转发消息 - 检测其他用户
+
+<b>3. 验证类型:</b>
+• math - 数学题验证
+• button - 按钮选择
+• captcha - 验证码输入
+
+<b>4. 机器人检测维度 (10项):</b>
+• 官方 bot 标记
+• 垃圾关键词
+• 用户名模式
+• 快速加入
+• 数字/无效名称
+• 无头像/用户名
+• 新账号检测
+
+需要更多帮助？查看项目文档:
+https://github.com/ovws/oizhibot
+      `.trim()
+    );
+    return;
+  }
+
+  // 处理 /check 命令 - 检测自己
+  if (text === '/check') {
+    const detection = detectBot(user, { joinTime: Date.now() });
+    
+    const riskLevel = {
+      'high': '🔴 高风险',
+      'medium': '🟡 中风险',
+      'low': '🟢 低风险',
+      'none': '✅ 正常'
+    };
+
+    let detectionDetails = '';
+    if (detection.detections && detection.detections.length > 0) {
+      detectionDetails = '\n\n<b>检测到的问题:</b>\n' + 
+        detection.detections.map(d => `• ${d.type}: ${JSON.stringify(d)}`).join('\n');
+    }
+
+    await bot.sendMessage(
+      message.chat.id,
+      `🔍 <b>账号检测结果</b>
+
+👤 用户: ${user.first_name}${user.username ? ' (@' + user.username + ')' : ''}
+🆔 ID: <code>${user.id}</code>
+
+📊 可疑评分: <b>${detection.score}</b>/100
+⚠️ 风险等级: ${riskLevel[detection.level]}
+
+判定结果:
+${detection.isBot ? '❌ 识别为机器人账号' : detection.isSuspicious ? '⚠️ 有可疑行为，需验证' : '✅ 账号正常'}
+${detectionDetails}
+
+💡 提示: 你可以转发其他用户的消息给我来检测他们的账号
+      `.trim()
+    );
+    return;
+  }
+
+  // 处理转发的消息 - 检测其他用户
+  if (message.forward_from) {
+    const targetUser = message.forward_from;
+    const detection = detectBot(targetUser, { joinTime: Date.now() });
+    
+    const riskLevel = {
+      'high': '🔴 高风险',
+      'medium': '🟡 中风险', 
+      'low': '🟢 低风险',
+      'none': '✅ 正常'
+    };
+
+    let detectionDetails = '';
+    if (detection.detections && detection.detections.length > 0) {
+      detectionDetails = '\n\n<b>检测到的问题:</b>\n' + 
+        detection.detections.map(d => {
+          const typeNames = {
+            'username_pattern': '用户名模式异常',
+            'no_username': '无用户名',
+            'invalid_first_name': '名称无效',
+            'numeric_name': '纯数字名称',
+            'fast_join': '快速加入',
+            'no_profile_photo': '无头像',
+            'new_account_id': '新账号',
+            'official_bot_flag': '官方Bot标记',
+            'spam_keyword': '垃圾关键词'
+          };
+          return `• ${typeNames[d.type] || d.type}`;
+        }).join('\n');
+    }
+
+    // 检查是否在黑名单
+    const isBlacklist = await isBlacklisted(db, targetUser.id);
+
+    await bot.sendMessage(
+      message.chat.id,
+      `🔍 <b>用户检测结果</b>
+
+👤 用户: ${targetUser.first_name}${targetUser.username ? ' (@' + targetUser.username + ')' : ''}
+🆔 ID: <code>${targetUser.id}</code>
+${isBlacklist ? '🚫 <b>该用户在黑名单中</b>\n' : ''}
+📊 可疑评分: <b>${detection.score}</b>/100
+⚠️ 风险等级: ${riskLevel[detection.level]}
+
+判定结果:
+${detection.isBot ? '❌ 识别为机器人账号' : detection.isSuspicious ? '⚠️ 有可疑行为，建议验证' : '✅ 账号正常'}
+${detectionDetails}
+
+💡 <b>建议操作:</b>
+${detection.isBot ? '立即封禁此用户' : detection.isSuspicious ? '加入群组时需要验证' : '可以正常加入群组'}
+      `.trim()
+    );
+    return;
+  }
+
+  // 处理待验证状态的回复
   const verification = await getUserVerification(db, user.id);
 
   if (!verification || verification.status !== 'pending') {
     await bot.sendMessage(
       message.chat.id,
-      '你当前没有待验证的请求。'
+      `💬 你当前没有待验证的请求
+
+🔍 你可以:
+• /check - 检测自己的账号
+• 转发消息给我 - 检测其他用户
+• /help - 查看帮助文档
+      `.trim()
     );
     return;
   }
 
+  // 验证答案
   if (text.toLowerCase() === verification.verification_code.toLowerCase()) {
     await updateVerificationStatus(db, user.id, 'verified');
     await bot.unrestrictChatMember(verification.chat_id, user.id);
