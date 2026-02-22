@@ -7,15 +7,15 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "telegram_verification"
-database_id = "your-database-id"  # 运行 wrangler d1 create telegram_verification 后替换
+database_id = "281a317d-1ace-47b2-88f3-7853cb7398dd"
 
 # 环境变量（开发/测试用，生产环境请使用 wrangler secret）
-# [vars]
-# TELEGRAM_BOT_TOKEN = "your-bot-token"
+[vars]
+TELEGRAM_BOT_TOKEN = "8131509226:AAHBgtGDouwJ6-9FfyLfiA7qFm-2mQ-759s"
 
 # 生产环境使用加密的 secrets（推荐）:
-# wrangler secret put TELEGRAM_BOT_TOKEN
-# wrangler secret put WEBHOOK_SECRET
+# npx wrangler secret put TELEGRAM_BOT_TOKEN
+# npx wrangler secret put WEBHOOK_SECRET
 
 # Workers 资源配置
 [build]
