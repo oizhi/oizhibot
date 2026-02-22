@@ -279,6 +279,79 @@ function generateCaptchaChallenge() {
 }
 
 // ==================== Database ====================
+
+// 自动初始化数据库表
+async function initializeDatabaseTables(db) {
+  try {
+    // 创建所有必需的表
+    const tables = [
+      // 验证记录表
+      `CREATE TABLE IF NOT EXISTS verifications (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        first_name TEXT,
+        chat_id INTEGER,
+        status TEXT CHECK(status IN ('pending', 'verified', 'failed', 'banned')),
+        verification_code TEXT,
+        attempts INTEGER DEFAULT 0,
+        created_at INTEGER,
+        verified_at INTEGER,
+        metadata TEXT
+      )`,
+      
+      // 黑名单表
+      `CREATE TABLE IF NOT EXISTS blacklist (
+        user_id INTEGER PRIMARY KEY,
+        reason TEXT,
+        banned_at INTEGER,
+        banned_by INTEGER,
+        metadata TEXT
+      )`,
+      
+      // 群组配置表
+      `CREATE TABLE IF NOT EXISTS group_configs (
+        chat_id INTEGER PRIMARY KEY,
+        verification_type TEXT CHECK(verification_type IN ('math', 'button', 'captcha', 'custom')),
+        timeout_seconds INTEGER DEFAULT 300,
+        auto_ban_bots INTEGER DEFAULT 1,
+        welcome_message TEXT,
+        bot_detection_level TEXT CHECK(bot_detection_level IN ('low', 'medium', 'high')) DEFAULT 'medium',
+        created_at INTEGER,
+        updated_at INTEGER
+      )`,
+      
+      // 机器人检测日志表
+      `CREATE TABLE IF NOT EXISTS bot_detection_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        chat_id INTEGER,
+        detection_type TEXT,
+        score INTEGER,
+        action TEXT,
+        detected_at INTEGER,
+        metadata TEXT
+      )`,
+      
+      // 索引
+      `CREATE INDEX IF NOT EXISTS idx_verifications_chat ON verifications(chat_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_verifications_status ON verifications(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_detection_user ON bot_detection_log(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_detection_chat ON bot_detection_log(chat_id)`
+    ];
+
+    // 执行所有建表语句
+    for (const sql of tables) {
+      await db.prepare(sql).run();
+    }
+    
+    console.log('✅ Database tables initialized successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to initialize database tables:', error);
+    return false;
+  }
+}
+
 async function getUserVerification(db, userId) {
   const result = await db
     .prepare('SELECT * FROM verifications WHERE user_id = ?')
@@ -347,18 +420,62 @@ async function addToBlacklist(db, userId, reason, bannedBy = null) {
 }
 
 async function getGroupConfig(db, chatId) {
-  const result = await db
-    .prepare('SELECT * FROM group_configs WHERE chat_id = ?')
-    .bind(chatId)
-    .first();
+  try {
+    const result = await db
+      .prepare('SELECT * FROM group_configs WHERE chat_id = ?')
+      .bind(chatId)
+      .first();
 
-  return result || {
-    chat_id: chatId,
-    verification_type: 'math',
-    timeout_seconds: 300,
-    auto_ban_bots: 1,
-    bot_detection_level: 'medium'
-  };
+    // 如果配置存在，直接返回
+    if (result) {
+      return result;
+    }
+
+    // 如果不存在，创建默认配置
+    const defaultConfig = {
+      chat_id: chatId,
+      verification_type: 'math',
+      timeout_seconds: 300,
+      auto_ban_bots: 1,
+      bot_detection_level: 'medium'
+    };
+
+    // 尝试插入默认配置到数据库
+    try {
+      await db
+        .prepare(
+          `INSERT INTO group_configs (chat_id, verification_type, timeout_seconds, auto_ban_bots, bot_detection_level, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          chatId,
+          defaultConfig.verification_type,
+          defaultConfig.timeout_seconds,
+          defaultConfig.auto_ban_bots,
+          defaultConfig.bot_detection_level,
+          Date.now(),
+          Date.now()
+        )
+        .run();
+      
+      console.log(`✅ Auto-created config for chat ${chatId}`);
+    } catch (insertError) {
+      // 如果插入失败（例如表不存在），记录错误但继续使用默认配置
+      console.error('Failed to auto-create group config:', insertError);
+    }
+
+    return defaultConfig;
+  } catch (error) {
+    // 如果查询失败（例如表不存在），返回默认配置
+    console.error('Error getting group config:', error);
+    return {
+      chat_id: chatId,
+      verification_type: 'math',
+      timeout_seconds: 300,
+      auto_ban_bots: 1,
+      bot_detection_level: 'medium'
+    };
+  }
 }
 
 async function logBotDetection(db, data) {
@@ -430,6 +547,9 @@ async function handleNewChatMember(chatMember, bot, db) {
 
   // 如果是 Bot 自己被添加到群组
   if (user.is_bot && user.id === fromUser.id) {
+    // 自动初始化该群组的配置
+    await getGroupConfig(db, chatId);
+    
     // 发送欢迎消息
     await bot.sendMessage(
       chatId,
@@ -474,7 +594,9 @@ async function handleNewMember(message, member, bot, db) {
     try {
       const botInfo = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getMe`).then(r => r.json());
       if (botInfo.result && member.id === botInfo.result.id) {
-        // Bot 自己被添加
+        // Bot 自己被添加，自动初始化配置
+        await getGroupConfig(db, chatId);
+        
         await bot.sendMessage(
           chatId,
           `👋 <b>感谢添加 OizhiBot！</b>
@@ -1166,6 +1288,11 @@ export default {
     }
 
     try {
+      // 首次请求时尝试初始化数据库（幂等操作）
+      if (env.DB && url.pathname === '/webhook') {
+        ctx.waitUntil(initializeDatabaseTables(env.DB));
+      }
+
       if (url.pathname === '/health') {
         return new Response(JSON.stringify({
           status: 'healthy',
