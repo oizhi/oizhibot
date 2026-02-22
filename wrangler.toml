@@ -1,0 +1,36 @@
+name = "telegram-verification-bot"
+main = "src/worker.js"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 数据库绑定
+[[d1_databases]]
+binding = "DB"
+database_name = "telegram_verification"
+database_id = "your-database-id"  # 运行 wrangler d1 create telegram_verification 后替换
+
+# 环境变量（开发/测试用，生产环境请使用 wrangler secret）
+# [vars]
+# TELEGRAM_BOT_TOKEN = "your-bot-token"
+
+# 生产环境使用加密的 secrets（推荐）:
+# wrangler secret put TELEGRAM_BOT_TOKEN
+# wrangler secret put WEBHOOK_SECRET
+
+# Workers 资源配置
+[build]
+command = ""
+
+# 路由配置（可选，如果使用自定义域名）
+# routes = [
+#   { pattern = "bot.yourdomain.com/*", zone_name = "yourdomain.com" }
+# ]
+
+# 环境配置
+[env.production]
+name = "telegram-verification-bot"
+# vars = { ENVIRONMENT = "production" }
+
+[env.staging]
+name = "telegram-verification-bot-staging"
+# vars = { ENVIRONMENT = "staging" }

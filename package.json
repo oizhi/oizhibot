@@ -1,0 +1,24 @@
+{
+  "name": "telegram-verification-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for member verification and anti-bot protection using Cloudflare Workers",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "setup-db": "wrangler d1 execute telegram_verification --file=./schema/schema.sql"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "verification",
+    "cloudflare",
+    "workers",
+    "d1"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
