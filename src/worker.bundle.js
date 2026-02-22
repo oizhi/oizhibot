@@ -637,10 +637,260 @@ async function handlePrivateMessage(message, bot, db) {
 
 async function handleGroupMessage(message, bot, db) {
   const user = message.from;
+  const text = message.text?.trim();
+  const chatId = message.chat.id;
+
+  // 检查是否是管理员命令
+  if (text && text.startsWith('/')) {
+    try {
+      const chatMember = await bot.getChatMember(chatId, user.id);
+      const isAdmin = ['creator', 'administrator'].includes(chatMember.status);
+      
+      if (isAdmin) {
+        await handleAdminCommand(message, bot, db);
+        return;
+      }
+    } catch (error) {
+      console.error('Error checking admin status:', error);
+    }
+  }
+
+  // 原有的验证检查逻辑
   const verification = await getUserVerification(db, user.id);
 
   if (verification && verification.status === 'pending') {
     await bot.deleteMessage(message.chat.id, message.message_id);
+  }
+}
+
+async function handleAdminCommand(message, bot, db) {
+  const text = message.text.trim();
+  const chatId = message.chat.id;
+  const args = text.split(' ');
+  const command = args[0];
+
+  try {
+    // /verify_config - 配置验证方式
+    if (command === '/verify_config') {
+      const type = args[1];
+
+      if (['math', 'button', 'captcha'].includes(type)) {
+        await db.prepare(`
+          INSERT INTO group_configs (chat_id, verification_type, timeout_seconds, auto_ban_bots, bot_detection_level, updated_at)
+          VALUES (?, ?, 300, 1, 'medium', ?)
+          ON CONFLICT(chat_id) DO UPDATE SET 
+            verification_type = excluded.verification_type,
+            updated_at = excluded.updated_at
+        `).bind(chatId, type, Date.now()).run();
+
+        await bot.sendMessage(chatId, `✅ 验证方式已设置为: ${type}\n\n可选类型:\n• math - 数学题\n• button - 按钮选择\n• captcha - 验证码输入`);
+      } else {
+        await bot.sendMessage(
+          chatId,
+          '❌ 用法: /verify_config <类型>\n\n可选类型:\n• math - 数学题\n• button - 按钮选择\n• captcha - 验证码输入'
+        );
+      }
+      return;
+    }
+
+    // /verify_timeout - 设置超时时间
+    if (command === '/verify_timeout') {
+      const seconds = parseInt(args[1]);
+
+      if (seconds && seconds >= 60 && seconds <= 600) {
+        await db.prepare(`
+          INSERT INTO group_configs (chat_id, verification_type, timeout_seconds, auto_ban_bots, bot_detection_level, updated_at)
+          VALUES (?, 'math', ?, 1, 'medium', ?)
+          ON CONFLICT(chat_id) DO UPDATE SET 
+            timeout_seconds = excluded.timeout_seconds,
+            updated_at = excluded.updated_at
+        `).bind(chatId, seconds, Date.now()).run();
+
+        await bot.sendMessage(chatId, `✅ 验证超时时间已设置为: ${seconds}秒 (${Math.floor(seconds/60)}分钟)`);
+      } else {
+        await bot.sendMessage(chatId, '❌ 用法: /verify_timeout <秒数>\n\n范围: 60-600 秒 (1-10分钟)');
+      }
+      return;
+    }
+
+    // /autoban - 开关自动封禁
+    if (command === '/autoban') {
+      const enabled = args[1] === 'on' ? 1 : 0;
+
+      await db.prepare(`
+        INSERT INTO group_configs (chat_id, verification_type, timeout_seconds, auto_ban_bots, bot_detection_level, updated_at)
+        VALUES (?, 'math', 300, ?, 'medium', ?)
+        ON CONFLICT(chat_id) DO UPDATE SET 
+          auto_ban_bots = excluded.auto_ban_bots,
+          updated_at = excluded.updated_at
+      `).bind(chatId, enabled, Date.now()).run();
+
+      await bot.sendMessage(
+        chatId,
+        `✅ 自动封禁机器人已${enabled ? '开启' : '关闭'}\n\n${enabled ? '⚠️ 高可疑度账号将被自动踢出' : '📝 所有新成员都需要完成验证'}`
+      );
+      return;
+    }
+
+    // /blacklist - 查看黑名单
+    if (command === '/blacklist') {
+      const blacklist = await db.prepare(`
+        SELECT user_id, reason, banned_at 
+        FROM blacklist 
+        ORDER BY banned_at DESC 
+        LIMIT 20
+      `).all();
+
+      if (!blacklist.results || blacklist.results.length === 0) {
+        await bot.sendMessage(chatId, '📋 黑名单为空');
+        return;
+      }
+
+      const list = blacklist.results.map((item, i) => 
+        `${i+1}. ID: <code>${item.user_id}</code>\n   原因: ${item.reason}\n   时间: ${new Date(item.banned_at).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'})}`
+      ).join('\n\n');
+
+      await bot.sendMessage(chatId, `📋 黑名单 (最近20条):\n\n${list}`);
+      return;
+    }
+
+    // /unban - 解除封禁
+    if (command === '/unban') {
+      const userId = parseInt(args[1]);
+
+      if (userId) {
+        const result = await db.prepare('DELETE FROM blacklist WHERE user_id = ?')
+          .bind(userId)
+          .run();
+        
+        if (result.changes > 0) {
+          await bot.sendMessage(chatId, `✅ 已将用户 <code>${userId}</code> 从黑名单移除`);
+        } else {
+          await bot.sendMessage(chatId, `❌ 用户 <code>${userId}</code> 不在黑名单中`);
+        }
+      } else {
+        await bot.sendMessage(chatId, '❌ 用法: /unban <用户ID>');
+      }
+      return;
+    }
+
+    // /ban - 手动加入黑名单
+    if (command === '/ban') {
+      const userId = parseInt(args[1]);
+      const reason = args.slice(2).join(' ') || '管理员手动封禁';
+
+      if (userId) {
+        await addToBlacklist(db, userId, reason, message.from.id);
+        
+        // 尝试踢出该用户（如果在群里）
+        try {
+          await bot.kickChatMember(chatId, userId);
+          await bot.sendMessage(chatId, `✅ 已封禁用户 <code>${userId}</code> 并移出群组\n原因: ${reason}`);
+        } catch (error) {
+          await bot.sendMessage(chatId, `✅ 已将用户 <code>${userId}</code> 加入黑名单\n原因: ${reason}\n\n⚠️ 该用户当前不在群组中`);
+        }
+      } else {
+        await bot.sendMessage(chatId, '❌ 用法: /ban <用户ID> [原因]');
+      }
+      return;
+    }
+
+    // /stats - 统计信息
+    if (command === '/stats') {
+      const stats = await db.prepare(`
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) as verified,
+          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending
+        FROM verifications
+        WHERE chat_id = ?
+      `).bind(chatId).first();
+
+      const botCount = await db.prepare(`
+        SELECT COUNT(*) as count
+        FROM bot_detection_log
+        WHERE chat_id = ? AND action = 'auto_ban'
+      `).bind(chatId).first();
+
+      const blacklistCount = await db.prepare(`
+        SELECT COUNT(*) as count FROM blacklist
+      `).first();
+
+      await bot.sendMessage(chatId, `
+📊 群组统计信息
+
+👥 验证记录:
+• 总数: ${stats?.total || 0}
+• ✅ 通过: ${stats?.verified || 0}
+• ❌ 失败: ${stats?.failed || 0}
+• ⏳ 待验证: ${stats?.pending || 0}
+
+🤖 机器人检测:
+• 自动封禁: ${botCount?.count || 0}
+
+🚫 黑名单:
+• 总数: ${blacklistCount?.count || 0}
+      `.trim());
+      return;
+    }
+
+    // /config - 查看当前配置
+    if (command === '/config') {
+      const config = await getGroupConfig(db, chatId);
+      
+      const typeNames = {
+        'math': '数学题',
+        'button': '按钮选择',
+        'captcha': '验证码输入'
+      };
+
+      await bot.sendMessage(chatId, `
+⚙️ 群组当前配置
+
+🔐 验证方式: ${typeNames[config.verification_type] || config.verification_type}
+⏱ 超时时间: ${config.timeout_seconds}秒 (${Math.floor(config.timeout_seconds/60)}分钟)
+🤖 自动封禁: ${config.auto_ban_bots ? '开启' : '关闭'}
+📊 检测级别: ${config.bot_detection_level}
+
+修改配置:
+• /verify_config <math|button|captcha>
+• /verify_timeout <秒数>
+• /autoban <on|off>
+      `.trim());
+      return;
+    }
+
+    // /help - 帮助信息
+    if (command === '/help' || command === '/admin') {
+      await bot.sendMessage(chatId, `
+🤖 管理员命令列表
+
+📝 配置命令:
+• /config - 查看当前配置
+• /verify_config <类型> - 设置验证方式
+• /verify_timeout <秒> - 设置超时时间
+• /autoban <on|off> - 自动封禁开关
+
+🚫 黑名单管理:
+• /blacklist - 查看黑名单
+• /ban <用户ID> [原因] - 封禁用户
+• /unban <用户ID> - 解除封禁
+
+📊 统计信息:
+• /stats - 查看群组统计
+
+💡 提示:
+• 所有命令仅管理员可用
+• 修改配置后立即生效
+• 黑名单全局生效
+      `.trim());
+      return;
+    }
+
+  } catch (error) {
+    console.error('Error handling admin command:', error);
+    await bot.sendMessage(chatId, `❌ 命令执行失败: ${error.message}`);
   }
 }
 
