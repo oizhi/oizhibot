@@ -20,6 +20,8 @@ TELEGRAM_BOT_TOKEN = "8131509226:AAHBgtGDouwJ6-9FfyLfiA7qFm-2mQ-759s"
 # Workers 资源配置
 [build]
 command = ""
+# 明确指定这是一个无静态文件的Worker项目
+# 禁用静态文件检测，避免部署错误
 
 # 路由配置（可选，如果使用自定义域名）
 # routes = [

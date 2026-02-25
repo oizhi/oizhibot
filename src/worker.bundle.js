@@ -1,42 +1,20 @@
 /**
- * Telegram 对话式转发机器人 - 完整集成版本
- * 
- * 功能：
- * - 对话式视频库管理
- * - 自动转发到多个目标
- * - 权限管理
- * - 统计分析
+ * Telegram Verification Bot - Bundled Version
+ * Built: 2026-02-25T09:50:26.700Z
+ * Source: worker.js
+ * Size: 66442 characters
  */
 
-// ==================== Telegram API 类 ====================
 
-class TelegramAPI {
+
+class TelegramBot {
   constructor(token) {
     this.token = token;
-    this.baseURL = `https://api.telegram.org/bot${token}`;
-  }
-
-  async callAPI(method, params = {}) {
-    try {
-      const response = await fetch(`${this.baseURL}/${method}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params)
-      });
-      
-      const result = await response.json();
-      if (!result.ok) {
-        console.error(`API call failed: ${method}`, result);
-      }
-      return result;
-    } catch (error) {
-      console.error(`API error: ${method}`, error);
-      return { ok: false, error: error.message };
-    }
+    this.apiUrl = `https://api.telegram.org/bot${token}`;
   }
 
   async sendMessage(chatId, text, options = {}) {
-    return this.callAPI('sendMessage', {
+    return this.apiCall('sendMessage', {
       chat_id: chatId,
       text,
       parse_mode: 'HTML',
@@ -44,1292 +22,2429 @@ class TelegramAPI {
     });
   }
 
-  async editMessageText(chatId, messageId, text, options = {}) {
-    return this.callAPI('editMessageText', {
+  async restrictChatMember(chatId, userId, permissions = {}) {
+    return this.apiCall('restrictChatMember', {
       chat_id: chatId,
-      message_id: messageId,
-      text,
-      parse_mode: 'HTML',
-      ...options
+      user_id: userId,
+      permissions: {
+        can_send_messages: false,
+        can_send_media_messages: false,
+        can_send_polls: false,
+        can_send_other_messages: false,
+        can_add_web_page_previews: false,
+        can_change_info: false,
+        can_invite_users: false,
+        can_pin_messages: false,
+        ...permissions
+      }
+    });
+  }
+
+  async unrestrictChatMember(chatId, userId) {
+    return this.apiCall('restrictChatMember', {
+      chat_id: chatId,
+      user_id: userId,
+      permissions: {
+        can_send_messages: true,
+        can_send_media_messages: true,
+        can_send_polls: true,
+        can_send_other_messages: true,
+        can_add_web_page_previews: true,
+        can_change_info: true,
+        can_invite_users: true,
+        can_pin_messages: true
+      }
+    });
+  }
+
+  async kickChatMember(chatId, userId) {
+    return this.apiCall('banChatMember', {
+      chat_id: chatId,
+      user_id: userId
+    });
+  }
+
+  async deleteMessage(chatId, messageId) {
+    return this.apiCall('deleteMessage', {
+      chat_id: chatId,
+      message_id: messageId
     });
   }
 
   async answerCallbackQuery(callbackQueryId, text = '', showAlert = false) {
-    return this.callAPI('answerCallbackQuery', {
+    return this.apiCall('answerCallbackQuery', {
       callback_query_id: callbackQueryId,
       text,
       show_alert: showAlert
     });
   }
 
-  async forwardMessage(fromChatId, toChatId, messageId) {
-    return this.callAPI('forwardMessage', {
-      chat_id: toChatId,
-      from_chat_id: fromChatId,
-      message_id: messageId
-    });
-  }
-
-  async copyMessage(fromChatId, toChatId, messageId, options = {}) {
-    return this.callAPI('copyMessage', {
-      chat_id: toChatId,
-      from_chat_id: fromChatId,
-      message_id: messageId,
-      ...options
-    });
-  }
-
-  async deleteMessage(chatId, messageId) {
-    return this.callAPI('deleteMessage', {
-      chat_id: chatId,
-      message_id: messageId
-    });
-  }
-
   async getChatMember(chatId, userId) {
-    return this.callAPI('getChatMember', {
+    return this.apiCall('getChatMember', {
       chat_id: chatId,
       user_id: userId
     });
   }
 
-  async getChat(chatId) {
-    return this.callAPI('getChat', {
-      chat_id: chatId
+  async forwardMessage(chatId, fromChatId, messageId) {
+    return this.apiCall('forwardMessage', {
+      chat_id: chatId,
+      from_chat_id: fromChatId,
+      message_id: messageId
     });
+  }
+
+  async apiCall(method, params) {
+    const response = await fetch(`${this.apiUrl}/${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+
+    const result = await response.json();
+    if (!result.ok) {
+      throw new Error(`Telegram API error: ${result.description}`);
+    }
+    return result.result;
   }
 }
 
-// ==================== 数据库操作类 ====================
+function createInlineKeyboard(buttons) {
+  return {
+    inline_keyboard: buttons
+  };
+}
 
-class Database {
-  constructor(db) {
-    this.db = db;
+function detectBot(user, context = {}) {
+  let score = 0;
+  const detections = [];
+
+  if (user.username) {
+    const botPatterns = [
+      /bot$/i,
+      /^[a-z]+\d{4,}$/,
+      /^[a-z]{20,}$/,
+      /_spam/i,
+      /casino|betting|crypto|forex/i
+    ];
+
+    for (const pattern of botPatterns) {
+      if (pattern.test(user.username)) {
+        score += 30;
+        detections.push({ type: 'username_pattern', pattern: pattern.toString() });
+        break;
+      }
+    }
+  } else {
+    score += 10;
+    detections.push({ type: 'no_username' });
   }
 
-  // 初始化数据库
-  async initTables() {
-    try {
-      // 用户状态表
-      await this.db.prepare(`
-        CREATE TABLE IF NOT EXISTS user_states (
-          user_id INTEGER PRIMARY KEY,
-          mode TEXT NOT NULL DEFAULT 'idle',
-          current_repo TEXT,
-          setup_step TEXT,
-          setup_data TEXT,
-          message_count INTEGER DEFAULT 0,
-          updated_at INTEGER NOT NULL,
-          created_at INTEGER NOT NULL
-        )
-      `).run();
+  if (!user.first_name || user.first_name.length < 2) {
+    score += 15;
+    detections.push({ type: 'invalid_first_name' });
+  }
 
-      // 转发存储库表
-      await this.db.prepare(`
-        CREATE TABLE IF NOT EXISTS forward_repositories (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL UNIQUE,
-          description TEXT,
-          created_by INTEGER NOT NULL,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL
-        )
-      `).run();
+  if (user.first_name && /^[\d\s]+$/.test(user.first_name)) {
+    score += 20;
+    detections.push({ type: 'numeric_name' });
+  }
 
-      // 转发目标表
-      await this.db.prepare(`
-        CREATE TABLE IF NOT EXISTS forward_targets (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          repo_id INTEGER NOT NULL,
-          target_chat_id INTEGER NOT NULL,
-          target_type TEXT NOT NULL,
-          enabled INTEGER DEFAULT 1,
-          created_at INTEGER NOT NULL,
-          FOREIGN KEY (repo_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
-        )
-      `).run();
-
-      // 转发权限表
-      await this.db.prepare(`
-        CREATE TABLE IF NOT EXISTS forward_permissions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          repo_id INTEGER NOT NULL,
-          user_id INTEGER NOT NULL,
-          role TEXT NOT NULL,
-          granted_by INTEGER NOT NULL,
-          created_at INTEGER NOT NULL,
-          FOREIGN KEY (repo_id) REFERENCES forward_repositories(id) ON DELETE CASCADE,
-          UNIQUE(repo_id, user_id)
-        )
-      `).run();
-
-      // 转发记录表
-      await this.db.prepare(`
-        CREATE TABLE IF NOT EXISTS forwarded_messages (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          repo_id INTEGER NOT NULL,
-          original_chat_id INTEGER NOT NULL,
-          original_message_id INTEGER NOT NULL,
-          target_chat_id INTEGER NOT NULL,
-          target_message_id INTEGER,
-          forwarded_by INTEGER NOT NULL,
-          forwarded_at INTEGER NOT NULL,
-          FOREIGN KEY (repo_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
-        )
-      `).run();
-
-      // 创建索引
-      await this.db.prepare('CREATE INDEX IF NOT EXISTS idx_user_states_mode ON user_states(mode)').run();
-      await this.db.prepare('CREATE INDEX IF NOT EXISTS idx_forward_targets_repo ON forward_targets(repo_id)').run();
-      await this.db.prepare('CREATE INDEX IF NOT EXISTS idx_forward_permissions_repo ON forward_permissions(repo_id)').run();
-      await this.db.prepare('CREATE INDEX IF NOT EXISTS idx_forwarded_messages_repo ON forwarded_messages(repo_id)').run();
-
-      console.log('Database tables initialized');
-    } catch (error) {
-      console.error('Database init error:', error);
+  if (context.joinTime && context.previousJoinTime) {
+    const timeDiff = context.joinTime - context.previousJoinTime;
+    if (timeDiff < 5000) {
+      score += 25;
+      detections.push({ type: 'fast_join', timeDiff });
     }
   }
 
-  // ========== 用户状态管理 ==========
+  if (!user.has_photo) {
+    score += 10;
+    detections.push({ type: 'no_profile_photo' });
+  }
 
-  async getUserState(userId) {
-    try {
-      const result = await this.db
-        .prepare('SELECT * FROM user_states WHERE user_id = ?')
-        .bind(userId)
-        .first();
+  if (user.id > 5000000000) {
+    score += 5;
+    detections.push({ type: 'new_account_id' });
+  }
+
+  if (user.is_bot) {
+    score += 100;
+    detections.push({ type: 'official_bot_flag' });
+  }
+
+  const spamKeywords = [
+    'casino', 'betting', 'porn', 'xxx', 'dating', 
+    '赚钱', '兼职', '博彩', '色情', '约炮',
+    'crypto signal', 'forex', 'investment opportunity'
+  ];
+
+  const fullName = `${user.first_name || ''} ${user.last_name || ''}`.toLowerCase();
+  for (const keyword of spamKeywords) {
+    if (fullName.includes(keyword.toLowerCase())) {
+      score += 40;
+      detections.push({ type: 'spam_keyword', keyword });
+      break;
+    }
+  }
+
+  return {
+    score,
+    isBot: score >= 50,
+    isSuspicious: score >= 30,
+    detections,
+    level: score >= 70 ? 'high' : score >= 50 ? 'medium' : score >= 30 ? 'low' : 'none'
+  };
+}
+
+function generateVerificationChallenge(type = 'math') {
+  switch (type) {
+    case 'math':
+      return generateMathChallenge();
+    case 'button':
+      return generateButtonChallenge();
+    case 'captcha':
+      return generateCaptchaChallenge();
+    default:
+      return generateMathChallenge();
+  }
+}
+
+function generateMathChallenge() {
+  const num1 = Math.floor(Math.random() * 10) + 1;
+  const num2 = Math.floor(Math.random() * 10) + 1;
+  const operators = ['+', '-', '×'];
+  const operator = operators[Math.floor(Math.random() * operators.length)];
+
+  let answer;
+  let question;
+
+  switch (operator) {
+    case '+':
+      answer = num1 + num2;
+      question = `${num1} + ${num2}`;
+      break;
+    case '-':
+      answer = Math.max(num1, num2) - Math.min(num1, num2);
+      question = `${Math.max(num1, num2)} - ${Math.min(num1, num2)}`;
+      break;
+    case '×':
+      answer = num1 * num2;
+      question = `${num1} × ${num2}`;
+      break;
+  }
+
+  return {
+    type: 'math',
+    question: `请计算：${question} = ?`,
+    answer: answer.toString(),
+    options: generateMathOptions(answer)
+  };
+}
+
+function generateMathOptions(correctAnswer) {
+  const options = [correctAnswer];
+  
+  while (options.length < 4) {
+    const offset = Math.floor(Math.random() * 10) - 5;
+    const option = correctAnswer + offset;
+    if (option > 0 && !options.includes(option)) {
+      options.push(option);
+    }
+  }
+
+  return options.sort(() => Math.random() - 0.5).map(String);
+}
+
+function generateButtonChallenge() {
+  const emojis = ['🍎', '🍌', '🍇', '🍊', '🍓', '🍉', '🥝', '🍑'];
+  const correctEmoji = emojis[Math.floor(Math.random() * emojis.length)];
+  
+  const options = [correctEmoji];
+  while (options.length < 4) {
+    const emoji = emojis[Math.floor(Math.random() * emojis.length)];
+    if (!options.includes(emoji)) {
+      options.push(emoji);
+    }
+  }
+
+  return {
+    type: 'button',
+    question: `请点击 ${correctEmoji}`,
+    answer: correctEmoji,
+    options: options.sort(() => Math.random() - 0.5)
+  };
+}
+
+function generateCaptchaChallenge() {
+  const words = ['apple', 'book', 'cat', 'dog', 'fish', 'tree', 'sun', 'moon'];
+  const correctWord = words[Math.floor(Math.random() * words.length)];
+  
+  return {
+    type: 'captcha',
+    question: `请输入单词：${correctWord.toUpperCase()}`,
+    answer: correctWord,
+    options: null
+  };
+}
+
+async function initializeDatabaseTables(db) {
+  try {
+    
+    const tables = [
       
-      if (result && result.setup_data) {
-        result.setup_data = JSON.parse(result.setup_data);
-      }
-      
+      `CREATE TABLE IF NOT EXISTS verifications (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        first_name TEXT,
+        chat_id INTEGER,
+        status TEXT CHECK(status IN ('pending', 'verified', 'failed', 'banned')),
+        verification_code TEXT,
+        attempts INTEGER DEFAULT 0,
+        created_at INTEGER,
+        verified_at INTEGER,
+        metadata TEXT
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS blacklist (
+        user_id INTEGER PRIMARY KEY,
+        reason TEXT,
+        banned_at INTEGER,
+        banned_by INTEGER,
+        metadata TEXT
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS group_configs (
+        chat_id INTEGER PRIMARY KEY,
+        verification_type TEXT CHECK(verification_type IN ('math', 'button', 'captcha', 'custom')),
+        timeout_seconds INTEGER DEFAULT 300,
+        auto_ban_bots INTEGER DEFAULT 1,
+        welcome_message TEXT,
+        bot_detection_level TEXT CHECK(bot_detection_level IN ('low', 'medium', 'high')) DEFAULT 'medium',
+        created_at INTEGER,
+        updated_at INTEGER
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS bot_detection_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        chat_id INTEGER,
+        detection_type TEXT,
+        score INTEGER,
+        action TEXT,
+        detected_at INTEGER,
+        metadata TEXT
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS forward_repositories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        created_by INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS forward_targets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repository_id INTEGER NOT NULL,
+        target_chat_id INTEGER NOT NULL,
+        target_type TEXT CHECK(target_type IN ('channel', 'group', 'private')),
+        enabled INTEGER DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (repository_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS forwarded_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repository_id INTEGER NOT NULL,
+        source_user_id INTEGER NOT NULL,
+        source_message_id INTEGER,
+        message_type TEXT,
+        forwarded_to TEXT,
+        forwarded_at INTEGER NOT NULL,
+        metadata TEXT,
+        FOREIGN KEY (repository_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS forward_permissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repository_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        role TEXT CHECK(role IN ('admin', 'contributor', 'viewer')) DEFAULT 'contributor',
+        granted_by INTEGER NOT NULL,
+        granted_at INTEGER NOT NULL,
+        UNIQUE(repository_id, user_id),
+        FOREIGN KEY (repository_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
+      )`,
+
+      `CREATE INDEX IF NOT EXISTS idx_verifications_chat ON verifications(chat_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_verifications_status ON verifications(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_detection_user ON bot_detection_log(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_detection_chat ON bot_detection_log(chat_id)`,
+
+      `CREATE INDEX IF NOT EXISTS idx_forward_targets_repo ON forward_targets(repository_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_forwarded_messages_repo ON forwarded_messages(repository_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_forwarded_messages_user ON forwarded_messages(source_user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_forward_permissions_repo ON forward_permissions(repository_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_forward_permissions_user ON forward_permissions(user_id)`
+    ];
+
+    for (const sql of tables) {
+      await db.prepare(sql).run();
+    }
+    
+    console.log('✅ Database tables initialized successfully (verification + forwarding)');
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to initialize database tables:', error);
+    return false;
+  }
+}
+
+async function getUserVerification(db, userId) {
+  const result = await db
+    .prepare('SELECT * FROM verifications WHERE user_id = ?')
+    .bind(userId)
+    .first();
+  return result;
+}
+
+async function createVerification(db, data) {
+  const {
+    user_id,
+    username,
+    first_name,
+    chat_id,
+    verification_code,
+    metadata = {}
+  } = data;
+
+  await db
+    .prepare(
+      `INSERT INTO verifications (user_id, username, first_name, chat_id, status, verification_code, attempts, created_at, metadata)
+       VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, ?)`
+    )
+    .bind(
+      user_id,
+      username,
+      first_name,
+      chat_id,
+      verification_code,
+      Date.now(),
+      JSON.stringify(metadata)
+    )
+    .run();
+}
+
+async function updateVerificationStatus(db, userId, status) {
+  await db
+    .prepare('UPDATE verifications SET status = ?, verified_at = ? WHERE user_id = ?')
+    .bind(status, Date.now(), userId)
+    .run();
+}
+
+async function incrementAttempts(db, userId) {
+  await db
+    .prepare('UPDATE verifications SET attempts = attempts + 1 WHERE user_id = ?')
+    .bind(userId)
+    .run();
+}
+
+async function isBlacklisted(db, userId) {
+  const result = await db
+    .prepare('SELECT 1 FROM blacklist WHERE user_id = ?')
+    .bind(userId)
+    .first();
+  return !!result;
+}
+
+async function addToBlacklist(db, userId, reason, bannedBy = null) {
+  await db
+    .prepare(
+      `INSERT OR REPLACE INTO blacklist (user_id, reason, banned_at, banned_by, metadata)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .bind(userId, reason, Date.now(), bannedBy, JSON.stringify({}))
+    .run();
+}
+
+async function getGroupConfig(db, chatId) {
+  try {
+    const result = await db
+      .prepare('SELECT * FROM group_configs WHERE chat_id = ?')
+      .bind(chatId)
+      .first();
+
+    if (result) {
       return result;
-    } catch (error) {
-      console.error('getUserState error:', error);
-      return null;
     }
-  }
 
-  async setUserState(userId, state) {
+    const defaultConfig = {
+      chat_id: chatId,
+      verification_type: 'math',
+      timeout_seconds: 300,
+      auto_ban_bots: 1,
+      bot_detection_level: 'medium'
+    };
+
     try {
-      const now = Date.now();
-      const existing = await this.getUserState(userId);
-      
-      const setupData = state.setup_data ? JSON.stringify(state.setup_data) : null;
-      
-      if (existing) {
-        await this.db
-          .prepare(`
-            UPDATE user_states 
-            SET mode = ?, current_repo = ?, setup_step = ?, setup_data = ?, 
-                message_count = ?, updated_at = ?
-            WHERE user_id = ?
-          `)
-          .bind(
-            state.mode || 'idle',
-            state.current_repo || null,
-            state.setup_step || null,
-            setupData,
-            state.message_count || 0,
-            now,
-            userId
-          )
-          .run();
-      } else {
-        await this.db
-          .prepare(`
-            INSERT INTO user_states (user_id, mode, current_repo, setup_step, setup_data, message_count, updated_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `)
-          .bind(
-            userId,
-            state.mode || 'idle',
-            state.current_repo || null,
-            state.setup_step || null,
-            setupData,
-            state.message_count || 0,
-            now,
-            now
-          )
-          .run();
-      }
-    } catch (error) {
-      console.error('setUserState error:', error);
-    }
-  }
-
-  async clearUserState(userId) {
-    await this.setUserState(userId, {
-      mode: 'idle',
-      current_repo: null,
-      setup_step: null,
-      setup_data: null,
-      message_count: 0
-    });
-  }
-
-  // ========== 转发存储库管理 ==========
-
-  async createRepository(name, description, createdBy) {
-    try {
-      const now = Date.now();
-      const result = await this.db
-        .prepare(`
-          INSERT INTO forward_repositories (name, description, created_by, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?)
-        `)
-        .bind(name, description, createdBy, now, now)
+      await db
+        .prepare(
+          `INSERT INTO group_configs (chat_id, verification_type, timeout_seconds, auto_ban_bots, bot_detection_level, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          chatId,
+          defaultConfig.verification_type,
+          defaultConfig.timeout_seconds,
+          defaultConfig.auto_ban_bots,
+          defaultConfig.bot_detection_level,
+          Date.now(),
+          Date.now()
+        )
         .run();
       
-      // 自动给创建者添加 admin 权限
-      const repoId = result.meta.last_row_id;
-      await this.grantPermission(repoId, createdBy, 'admin', createdBy);
+      console.log(`✅ Auto-created config for chat ${chatId}`);
+    } catch (insertError) {
       
-      return { success: true, id: repoId };
-    } catch (error) {
-      console.error('createRepository error:', error);
-      return { success: false, error: error.message };
+      console.error('Failed to auto-create group config:', insertError);
     }
-  }
 
-  async getRepository(name) {
-    try {
-      return await this.db
-        .prepare('SELECT * FROM forward_repositories WHERE name = ?')
-        .bind(name)
-        .first();
-    } catch (error) {
-      console.error('getRepository error:', error);
-      return null;
+    return defaultConfig;
+  } catch (error) {
+    
+    console.error('Error getting group config:', error);
+    return {
+      chat_id: chatId,
+      verification_type: 'math',
+      timeout_seconds: 300,
+      auto_ban_bots: 1,
+      bot_detection_level: 'medium'
+    };
+  }
+}
+
+async function logBotDetection(db, data) {
+  const { user_id, chat_id, detection_type, score, action, metadata = {} } = data;
+
+  await db
+    .prepare(
+      `INSERT INTO bot_detection_log (user_id, chat_id, detection_type, score, action, detected_at, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      user_id,
+      chat_id,
+      detection_type,
+      score,
+      action,
+      Date.now(),
+      JSON.stringify(metadata)
+    )
+    .run();
+}
+
+async function createForwardRepository(db, data) {
+  const { name, description, created_by } = data;
+  const now = Date.now();
+
+  try {
+    await db
+      .prepare(
+        `INSERT INTO forward_repositories (name, description, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .bind(name, description, created_by, now, now)
+      .run();
+    return { success: true };
+  } catch (error) {
+    if (error.message && error.message.includes('UNIQUE')) {
+      return { success: false, error: 'repository_exists' };
     }
+    console.error('createForwardRepository error:', error);
+    return { success: false, error: error.message };
   }
+}
 
-  async listRepositories(userId) {
-    try {
-      // 获取用户有权限的所有存储库
-      const results = await this.db
+async function getForwardRepository(db, name) {
+  try {
+    return await db
+      .prepare('SELECT * FROM forward_repositories WHERE name = ?')
+      .bind(name)
+      .first();
+  } catch (error) {
+    console.error('getForwardRepository error:', error);
+    return null;
+  }
+}
+
+async function listForwardRepositories(db, userId = null) {
+  try {
+    if (userId) {
+      
+      const result = await db
         .prepare(`
-          SELECT DISTINCT r.* 
-          FROM forward_repositories r
-          LEFT JOIN forward_permissions p ON r.id = p.repo_id
+          SELECT DISTINCT r.* FROM forward_repositories r
+          LEFT JOIN forward_permissions p ON r.id = p.repository_id
           WHERE r.created_by = ? OR p.user_id = ?
-          ORDER BY r.updated_at DESC
+          ORDER BY r.created_at DESC
         `)
         .bind(userId, userId)
         .all();
-      
-      return results.results || [];
-    } catch (error) {
-      console.error('listRepositories error:', error);
-      return [];
+      return result.results || [];
     }
-  }
 
-  async updateRepository(name, updates) {
-    try {
-      const now = Date.now();
-      const sets = [];
-      const bindings = [];
-      
-      if (updates.description !== undefined) {
-        sets.push('description = ?');
-        bindings.push(updates.description);
+    const result = await db
+      .prepare('SELECT * FROM forward_repositories ORDER BY created_at DESC')
+      .all();
+    return result.results || [];
+  } catch (error) {
+    console.error('listForwardRepositories error:', error);
+    return [];
+  }
+}
+
+async function deleteForwardRepository(db, name) {
+  try {
+    await db
+      .prepare('DELETE FROM forward_repositories WHERE name = ?')
+      .bind(name)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('deleteForwardRepository error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function updateForwardRepository(db, name, data) {
+  try {
+    const { description } = data;
+    await db
+      .prepare(`
+        UPDATE forward_repositories 
+        SET description = ?, updated_at = ?
+        WHERE name = ?
+      `)
+      .bind(description, Date.now(), name)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('updateForwardRepository error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function addForwardTarget(db, repoId, targetChatId, targetType) {
+  try {
+    const now = Date.now();
+    await db
+      .prepare(`
+        INSERT INTO forward_targets (repository_id, target_chat_id, target_type, enabled, created_at)
+        VALUES (?, ?, ?, 1, ?)
+      `)
+      .bind(repoId, targetChatId, targetType, now)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('addForwardTarget error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function removeForwardTarget(db, repoId, targetChatId) {
+  try {
+    await db
+      .prepare('DELETE FROM forward_targets WHERE repository_id = ? AND target_chat_id = ?')
+      .bind(repoId, targetChatId)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('removeForwardTarget error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function listForwardTargets(db, repoId) {
+  try {
+    const result = await db
+      .prepare('SELECT * FROM forward_targets WHERE repository_id = ? ORDER BY created_at')
+      .bind(repoId)
+      .all();
+    return result.results || [];
+  } catch (error) {
+    console.error('listForwardTargets error:', error);
+    return [];
+  }
+}
+
+async function toggleForwardTarget(db, repoId, targetChatId) {
+  try {
+    await db
+      .prepare(`
+        UPDATE forward_targets 
+        SET enabled = 1 - enabled 
+        WHERE repository_id = ? AND target_chat_id = ?
+      `)
+      .bind(repoId, targetChatId)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('toggleForwardTarget error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function grantForwardPermission(db, repoId, userId, role, grantedBy) {
+  try {
+    const now = Date.now();
+
+    await db
+      .prepare('DELETE FROM forward_permissions WHERE repository_id = ? AND user_id = ?')
+      .bind(repoId, userId)
+      .run();
+    
+    await db
+      .prepare(`
+        INSERT INTO forward_permissions (repository_id, user_id, role, granted_by, granted_at)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      .bind(repoId, userId, role, grantedBy, now)
+      .run();
+    
+    return { success: true };
+  } catch (error) {
+    console.error('grantForwardPermission error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function revokeForwardPermission(db, repoId, userId) {
+  try {
+    await db
+      .prepare('DELETE FROM forward_permissions WHERE repository_id = ? AND user_id = ?')
+      .bind(repoId, userId)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('revokeForwardPermission error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function checkForwardPermission(db, repoId, userId, requiredRole = 'contributor') {
+  try {
+    const result = await db
+      .prepare(`
+        SELECT r.created_by, p.role 
+        FROM forward_repositories r
+        LEFT JOIN forward_permissions p ON r.id = p.repository_id AND p.user_id = ?
+        WHERE r.id = ?
+      `)
+      .bind(userId, repoId)
+      .first();
+
+    if (!result) return false;
+
+    if (result.created_by === userId) return true;
+
+    const roleLevel = { viewer: 1, contributor: 2, admin: 3 };
+    const userLevel = roleLevel[result.role] || 0;
+    const requiredLevel = roleLevel[requiredRole] || 0;
+    
+    return userLevel >= requiredLevel;
+  } catch (error) {
+    console.error('checkForwardPermission error:', error);
+    return false;
+  }
+}
+
+async function listForwardPermissions(db, repoId) {
+  try {
+    const result = await db
+      .prepare('SELECT * FROM forward_permissions WHERE repository_id = ? ORDER BY granted_at')
+      .bind(repoId)
+      .all();
+    return result.results || [];
+  } catch (error) {
+    console.error('listForwardPermissions error:', error);
+    return [];
+  }
+}
+
+async function logForwardedMessage(db, data) {
+  try {
+    const { repository_id, source_user_id, source_message_id, message_type, forwarded_to, metadata } = data;
+    const now = Date.now();
+    
+    await db
+      .prepare(`
+        INSERT INTO forwarded_messages 
+        (repository_id, source_user_id, source_message_id, message_type, forwarded_to, forwarded_at, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      .bind(
+        repository_id,
+        source_user_id,
+        source_message_id,
+        message_type,
+        JSON.stringify(forwarded_to),
+        now,
+        JSON.stringify(metadata || {})
+      )
+      .run();
+  } catch (error) {
+    console.error('logForwardedMessage error:', error);
+  }
+}
+
+async function getForwardedStats(db, repoId, period = 'all') {
+  try {
+    let dateFilter = '';
+    const now = Date.now();
+    
+    if (period === 'today') {
+      const todayStart = new Date().setHours(0, 0, 0, 0);
+      dateFilter = `AND forwarded_at >= ${todayStart}`;
+    } else if (period === 'week') {
+      const weekStart = now - 7 * 24 * 60 * 60 * 1000;
+      dateFilter = `AND forwarded_at >= ${weekStart}`;
+    }
+
+    const total = await db
+      .prepare(`SELECT COUNT(*) as count FROM forwarded_messages WHERE repository_id = ? ${dateFilter}`)
+      .bind(repoId)
+      .first();
+
+    const byType = await db
+      .prepare(`
+        SELECT message_type, COUNT(*) as count 
+        FROM forwarded_messages 
+        WHERE repository_id = ? ${dateFilter}
+        GROUP BY message_type
+      `)
+      .bind(repoId)
+      .all();
+
+    const byUser = await db
+      .prepare(`
+        SELECT source_user_id, COUNT(*) as count 
+        FROM forwarded_messages 
+        WHERE repository_id = ? ${dateFilter}
+        GROUP BY source_user_id
+        ORDER BY count DESC
+        LIMIT 10
+      `)
+      .bind(repoId)
+      .all();
+
+    return {
+      total: total?.count || 0,
+      byType: byType.results || [],
+      byUser: byUser.results || []
+    };
+  } catch (error) {
+    console.error('getForwardedStats error:', error);
+    return { total: 0, byType: [], byUser: [] };
+  }
+}
+
+async function getRecentForwarded(db, repoId, limit = 10) {
+  try {
+    const result = await db
+      .prepare(`
+        SELECT * FROM forwarded_messages 
+        WHERE repository_id = ? 
+        ORDER BY forwarded_at DESC 
+        LIMIT ?
+      `)
+      .bind(repoId, limit)
+      .all();
+    
+    return result.results || [];
+  } catch (error) {
+    console.error('getRecentForwarded error:', error);
+    return [];
+  }
+}
+
+function getMessageType(message) {
+  if (message.photo) return 'photo';
+  if (message.video) return 'video';
+  if (message.document) return 'document';
+  if (message.audio) return 'audio';
+  if (message.voice) return 'voice';
+  if (message.sticker) return 'sticker';
+  if (message.animation) return 'animation';
+  if (message.poll) return 'poll';
+  return 'text';
+}
+
+function getTimeAgo(timestamp) {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return `${seconds}秒前`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}小时前`;
+  const days = Math.floor(hours / 24);
+  return `${days}天前`;
+}
+
+async function handleTelegramUpdate(update, env) {
+  const bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN);
+  const db = env.DB;
+
+  try {
+    
+    if (update.chat_member && update.chat_member.new_chat_member) {
+      await handleNewChatMember(update.chat_member, bot, db);
+      return;
+    }
+
+    if (update.message && update.message.new_chat_members) {
+      for (const member of update.message.new_chat_members) {
+        await handleNewMember(update.message, member, bot, db);
       }
-      
-      if (sets.length === 0) return { success: true };
-      
-      sets.push('updated_at = ?');
-      bindings.push(now);
-      bindings.push(name);
-      
-      await this.db
-        .prepare(`UPDATE forward_repositories SET ${sets.join(', ')} WHERE name = ?`)
-        .bind(...bindings)
-        .run();
-      
-      return { success: true };
-    } catch (error) {
-      console.error('updateRepository error:', error);
-      return { success: false, error: error.message };
+      return;
     }
+
+    if (update.callback_query) {
+      await handleCallbackQuery(update.callback_query, bot, db);
+      return;
+    }
+
+    if (update.message && update.message.chat.type === 'private') {
+      await handlePrivateMessage(update.message, bot, db);
+      return;
+    }
+
+    if (update.message && ['group', 'supergroup'].includes(update.message.chat.type)) {
+      await handleGroupMessage(update.message, bot, db);
+      return;
+    }
+  } catch (error) {
+    console.error('Error handling update:', error);
+  }
+}
+
+async function handleNewChatMember(chatMember, bot, db) {
+  const user = chatMember.new_chat_member.user;
+  const chatId = chatMember.chat.id;
+  const fromUser = chatMember.from;
+
+  if (user.is_bot && user.id === fromUser.id) {
+    
+    await getGroupConfig(db, chatId);
+
+    await bot.sendMessage(
+      chatId,
+      `👋 <b>感谢添加 OizhiBot！</b>
+
+🤖 我是智能群组验证机器人，可以帮助你:
+✅ 自动验证新成员
+✅ 检测并封禁机器人账号
+✅ 管理黑名单
+✅ 多种验证方式
+
+⚙️ <b>请授予我以下管理员权限:</b>
+• 限制用户
+• 删除消息
+• 封禁用户
+
+📝 <b>快速开始:</b>
+• /config - 查看当前配置
+• /verify_config math - 设置验证方式
+• /help - 查看所有命令
+
+🔐 <b>当前默认配置:</b>
+• 验证方式: 数学题
+• 超时时间: 5分钟
+• 自动封禁: 已开启
+
+💡 我已经开始工作了，新成员加入时会自动验证！
+      `.trim()
+    );
+    return;
   }
 
-  async deleteRepository(name) {
+  await processNewMember(chatId, user, bot, db);
+}
+
+async function handleNewMember(message, member, bot, db) {
+  const chatId = message.chat.id;
+
+  if (member.is_bot) {
+    
     try {
-      await this.db
-        .prepare('DELETE FROM forward_repositories WHERE name = ?')
-        .bind(name)
-        .run();
-      
-      return { success: true };
-    } catch (error) {
-      console.error('deleteRepository error:', error);
-      return { success: false, error: error.message };
-    }
-  }
+      const botInfo = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getMe`).then(r => r.json());
+      if (botInfo.result && member.id === botInfo.result.id) {
+        
+        await getGroupConfig(db, chatId);
+        
+        await bot.sendMessage(
+          chatId,
+          `👋 <b>感谢添加 OizhiBot！</b>
 
-  // ========== 转发目标管理 ==========
+🤖 我是智能群组验证机器人，可以帮助你:
+✅ 自动验证新成员
+✅ 检测并封禁机器人账号
+✅ 管理黑名单
+✅ 多种验证方式
 
-  async addTarget(repoId, targetChatId, targetType) {
-    try {
-      const now = Date.now();
-      await this.db
-        .prepare(`
-          INSERT INTO forward_targets (repo_id, target_chat_id, target_type, created_at)
-          VALUES (?, ?, ?, ?)
-        `)
-        .bind(repoId, targetChatId, targetType, now)
-        .run();
-      
-      return { success: true };
-    } catch (error) {
-      console.error('addTarget error:', error);
-      return { success: false, error: error.message };
-    }
-  }
+⚙️ <b>请授予我以下管理员权限:</b>
+• 限制用户
+• 删除消息
+• 封禁用户
 
-  async listTargets(repoId) {
-    try {
-      const results = await this.db
-        .prepare('SELECT * FROM forward_targets WHERE repo_id = ? ORDER BY created_at DESC')
-        .bind(repoId)
-        .all();
-      
-      return results.results || [];
-    } catch (error) {
-      console.error('listTargets error:', error);
-      return [];
-    }
-  }
+📝 <b>快速开始:</b>
+• /config - 查看当前配置
+• /verify_config math - 设置验证方式
+• /help - 查看所有命令
 
-  async toggleTarget(targetId, enabled) {
-    try {
-      await this.db
-        .prepare('UPDATE forward_targets SET enabled = ? WHERE id = ?')
-        .bind(enabled ? 1 : 0, targetId)
-        .run();
-      
-      return { success: true };
-    } catch (error) {
-      console.error('toggleTarget error:', error);
-      return { success: false, error: error.message };
-    }
-  }
+🔐 <b>当前默认配置:</b>
+• 验证方式: 数学题
+• 超时时间: 5分钟
+• 自动封禁: 已开启
 
-  async deleteTarget(targetId) {
-    try {
-      await this.db
-        .prepare('DELETE FROM forward_targets WHERE id = ?')
-        .bind(targetId)
-        .run();
-      
-      return { success: true };
-    } catch (error) {
-      console.error('deleteTarget error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  // ========== 权限管理 ==========
-
-  async grantPermission(repoId, userId, role, grantedBy) {
-    try {
-      const now = Date.now();
-      await this.db
-        .prepare(`
-          INSERT OR REPLACE INTO forward_permissions (repo_id, user_id, role, granted_by, created_at)
-          VALUES (?, ?, ?, ?, ?)
-        `)
-        .bind(repoId, userId, role, grantedBy, now)
-        .run();
-      
-      return { success: true };
-    } catch (error) {
-      console.error('grantPermission error:', error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async checkPermission(repoId, userId, requiredRole) {
-    try {
-      // 检查是否是创建者
-      const repo = await this.db
-        .prepare('SELECT created_by FROM forward_repositories WHERE id = ?')
-        .bind(repoId)
-        .first();
-      
-      if (repo && repo.created_by === userId) {
-        return true; // 创建者拥有所有权限
+💡 我已经开始工作了，新成员加入时会自动验证！
+          `.trim()
+        );
+        return;
       }
-      
-      // 检查权限表
-      const perm = await this.db
-        .prepare('SELECT role FROM forward_permissions WHERE repo_id = ? AND user_id = ?')
-        .bind(repoId, userId)
-        .first();
-      
-      if (!perm) return false;
-      
-      // 权限等级：admin > contributor > viewer
-      const roles = ['viewer', 'contributor', 'admin'];
-      const userRoleLevel = roles.indexOf(perm.role);
-      const requiredRoleLevel = roles.indexOf(requiredRole);
-      
-      return userRoleLevel >= requiredRoleLevel;
     } catch (error) {
-      console.error('checkPermission error:', error);
-      return false;
+      console.error('Error checking bot identity:', error);
     }
   }
+  
+  await processNewMember(chatId, member, bot, db);
+}
 
-  async listPermissions(repoId) {
-    try {
-      const results = await this.db
-        .prepare('SELECT * FROM forward_permissions WHERE repo_id = ? ORDER BY created_at DESC')
-        .bind(repoId)
-        .all();
-      
-      return results.results || [];
-    } catch (error) {
-      console.error('listPermissions error:', error);
-      return [];
-    }
+async function processNewMember(chatId, user, bot, db) {
+  if (await isBlacklisted(db, user.id)) {
+    await bot.kickChatMember(chatId, user.id);
+    await logBotDetection(db, {
+      user_id: user.id,
+      chat_id: chatId,
+      detection_type: 'blacklist',
+      score: 100,
+      action: 'banned'
+    });
+    return;
   }
 
-  async revokePermission(repoId, userId) {
-    try {
-      await this.db
-        .prepare('DELETE FROM forward_permissions WHERE repo_id = ? AND user_id = ?')
-        .bind(repoId, userId)
-        .run();
-      
-      return { success: true };
-    } catch (error) {
-      console.error('revokePermission error:', error);
-      return { success: false, error: error.message };
-    }
+  const config = await getGroupConfig(db, chatId);
+  const detection = detectBot(user, { joinTime: Date.now() });
+
+  if (detection.score > 0) {
+    await logBotDetection(db, {
+      user_id: user.id,
+      chat_id: chatId,
+      detection_type: 'join_detection',
+      score: detection.score,
+      action: detection.isBot ? 'auto_ban' : 'verify',
+      metadata: detection.detections
+    });
   }
 
-  // ========== 转发记录 ==========
-
-  async logForward(repoId, originalChatId, originalMessageId, targetChatId, targetMessageId, forwardedBy) {
-    try {
-      const now = Date.now();
-      await this.db
-        .prepare(`
-          INSERT INTO forwarded_messages 
-          (repo_id, original_chat_id, original_message_id, target_chat_id, target_message_id, forwarded_by, forwarded_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `)
-        .bind(repoId, originalChatId, originalMessageId, targetChatId, targetMessageId, forwardedBy, now)
-        .run();
-    } catch (error) {
-      console.error('logForward error:', error);
-    }
+  if (detection.isBot && config.auto_ban_bots) {
+    await bot.kickChatMember(chatId, user.id);
+    await addToBlacklist(db, user.id, 'Auto-detected as bot', null);
+    
+    await bot.sendMessage(
+      chatId,
+      `🤖 检测到机器人账号并已自动封禁\n用户: ${user.first_name || 'N/A'}\nID: ${user.id}\n可疑分数: ${detection.score}/100`
+    );
+    return;
   }
 
-  async getStats(repoId, period = null) {
-    try {
-      let query = 'SELECT COUNT(*) as total FROM forwarded_messages WHERE repo_id = ?';
-      const bindings = [repoId];
-      
-      if (period === 'today') {
-        const todayStart = new Date().setHours(0, 0, 0, 0);
-        query += ' AND forwarded_at >= ?';
-        bindings.push(todayStart);
-      } else if (period === 'week') {
-        const weekStart = Date.now() - 7 * 24 * 60 * 60 * 1000;
-        query += ' AND forwarded_at >= ?';
-        bindings.push(weekStart);
-      }
-      
-      const result = await this.db
-        .prepare(query)
-        .bind(...bindings)
-        .first();
-      
-      return { total: result?.total || 0 };
-    } catch (error) {
-      console.error('getStats error:', error);
-      return { total: 0 };
+  await bot.restrictChatMember(chatId, user.id, {
+    can_send_messages: false
+  });
+
+  const challenge = generateVerificationChallenge(config.verification_type);
+
+  await createVerification(db, {
+    user_id: user.id,
+    username: user.username,
+    first_name: user.first_name,
+    chat_id: chatId,
+    verification_code: challenge.answer,
+    metadata: { challenge, detection }
+  });
+
+  let keyboard;
+  if (challenge.options) {
+    keyboard = createInlineKeyboard([
+      challenge.options.map(option => ({
+        text: option,
+        callback_data: `verify:${user.id}:${option}`
+      }))
+    ]);
+  }
+
+  const userName = user.username ? `@${user.username}` : user.first_name;
+  const warningText = detection.isSuspicious 
+    ? `\n\n⚠️ 检测到可疑行为，请完成验证` 
+    : '';
+
+  await bot.sendMessage(
+    chatId,
+    `👋 欢迎 ${userName}!\n\n${challenge.question}\n\n⏱ 请在 ${config.timeout_seconds} 秒内完成验证${warningText}`,
+    keyboard ? { reply_markup: keyboard } : {}
+  );
+}
+
+async function handleCallbackQuery(callbackQuery, bot, db) {
+  const data = callbackQuery.data;
+  const user = callbackQuery.from;
+  const message = callbackQuery.message;
+
+  if (!data.startsWith('verify:')) {
+    return;
+  }
+
+  const [_, targetUserId, answer] = data.split(':');
+
+  if (user.id.toString() !== targetUserId) {
+    await bot.answerCallbackQuery(
+      callbackQuery.id,
+      '❌ 这不是你的验证消息',
+      true
+    );
+    return;
+  }
+
+  const verification = await getUserVerification(db, user.id);
+
+  if (!verification || verification.status !== 'pending') {
+    await bot.answerCallbackQuery(
+      callbackQuery.id,
+      '验证已过期或已完成',
+      true
+    );
+    return;
+  }
+
+  await incrementAttempts(db, user.id);
+
+  if (answer === verification.verification_code) {
+    await updateVerificationStatus(db, user.id, 'verified');
+    await bot.unrestrictChatMember(verification.chat_id, user.id);
+
+    await bot.answerCallbackQuery(callbackQuery.id, '✅ 验证成功！');
+    
+    await bot.sendMessage(
+      verification.chat_id,
+      `✅ ${user.first_name} 已通过验证，欢迎加入！`
+    );
+
+    await bot.deleteMessage(message.chat.id, message.message_id);
+
+  } else {
+    const verification_updated = await getUserVerification(db, user.id);
+    
+    if (verification_updated.attempts >= 3) {
+      await updateVerificationStatus(db, user.id, 'failed');
+      await bot.kickChatMember(verification.chat_id, user.id);
+      await addToBlacklist(db, user.id, 'Failed verification', null);
+
+      await bot.answerCallbackQuery(
+        callbackQuery.id,
+        '❌ 验证失败次数过多，已被移出群组',
+        true
+      );
+
+      await bot.sendMessage(
+        verification.chat_id,
+        `❌ ${user.first_name} 验证失败，已被移出群组`
+      );
+
+      await bot.deleteMessage(message.chat.id, message.message_id);
+    } else {
+      await bot.answerCallbackQuery(
+        callbackQuery.id,
+        `❌ 答案错误，还剩 ${3 - verification_updated.attempts} 次机会`,
+        true
+      );
     }
   }
 }
 
-// ==================== 对话式处理器 ====================
+async function handlePrivateMessage(message, bot, db) {
+  const user = message.from;
+  const text = message.text?.trim();
 
-class ConversationalHandler {
-  constructor(bot, db) {
-    this.bot = bot;
-    this.db = db;
+  if (text === '/start') {
+    await bot.sendMessage(
+      message.chat.id,
+      `👋 你好！我是 <b>OizhiBot</b> - 群组验证机器人
+
+🔐 <b>主要功能:</b>
+• 新成员智能验证（防止机器人入侵）
+• 10维度机器人检测算法
+• 自动封禁可疑账号
+• 黑名单管理
+• 多群组独立配置
+
+📖 <b>使用方法:</b>
+1️⃣ 将我添加到你的群组
+2️⃣ 授予我管理员权限:
+   • 限制用户
+   • 删除消息
+   • 封禁用户
+3️⃣ 我会自动开始工作！
+
+👥 <b>管理员命令:</b>
+• /config - 查看配置
+• /stats - 查看统计
+• /help - 完整命令列表
+
+🔍 <b>检测用户:</b>
+直接转发用户消息给我，我会分析该用户是否可疑
+
+💡 <b>提示:</b> 当你加入需要验证的群组时，我会在这里发送验证消息
+
+📦 开源地址: https://github.com/ovws/oizhibot
+      `.trim()
+    );
+    return;
   }
 
-  // 主菜单
-  async showMainMenu(chatId, userId) {
-    const repos = await this.db.listRepositories(userId);
-    
-    let text = '👋 欢迎使用内容转发助手！\n\n';
-    
-    if (repos.length > 0) {
-      text += `📦 <b>你的视频库 (${repos.length})</b>\n`;
-      
-      const state = await this.db.getUserState(userId);
-      const currentRepo = state?.current_repo;
-      
-      for (const repo of repos.slice(0, 3)) {
-        const status = (currentRepo === repo.name) ? ' ✅ 进行中' : '';
-        const targets = await this.db.listTargets(repo.id);
-        const enabledCount = targets.filter(t => t.enabled).length;
-        
-        text += `   • ${repo.name}${status}\n`;
-        text += `     🎯 ${enabledCount} 个目标`;
-        
-        const stats = await this.db.getStats(repo.id, 'today');
-        if (stats.total > 0) {
-          text += ` | 📊 今日 ${stats.total} 条`;
-        }
-        text += '\n';
-      }
-      
-      if (repos.length > 3) {
-        text += `   ... 还有 ${repos.length - 3} 个\n`;
-      }
-    } else {
-      text += '📦 你还没有视频库\n\n';
-      text += '视频库可以帮你:\n';
-      text += '✅ 自动转发内容到多个频道\n';
-      text += '✅ 多人协作管理\n';
-      text += '✅ 统计分析\n';
-    }
-    
-    const buttons = [
-      [
-        { text: '📦 管理视频库', callback_data: 'menu:repos' },
-        { text: '➕ 创建新库', callback_data: 'repo:create_start' }
-      ]
-    ];
-    
-    if (repos.length > 0) {
-      buttons.push([
-        { text: '📊 查看统计', callback_data: 'menu:stats' },
-        { text: '❓ 帮助', callback_data: 'menu:help' }
-      ]);
-    } else {
-      buttons.push([
-        { text: '❓ 如何使用', callback_data: 'menu:help' }
-      ]);
-    }
-    
-    await this.bot.sendMessage(chatId, text, {
-      reply_markup: { inline_keyboard: buttons }
-    });
+  if (text === '/help') {
+    await bot.sendMessage(
+      message.chat.id,
+      `📚 <b>帮助文档</b>
+
+<b>1. 群组管理员命令:</b>
+• /config - 查看当前配置
+• /verify_config &lt;类型&gt; - 设置验证方式
+• /verify_timeout &lt;秒&gt; - 设置超时时间
+• /autoban &lt;on|off&gt; - 自动封禁开关
+• /blacklist - 查看黑名单
+• /ban &lt;用户ID&gt; - 封禁用户
+• /unban &lt;用户ID&gt; - 解除封禁
+• /stats - 查看统计
+
+<b>2. 私聊功能:</b>
+• /start - 查看介绍
+• /check - 检测自己账号
+• 转发消息 - 检测其他用户
+
+<b>3. 内容转发系统:</b>
+<b>存储库管理</b>
+• /repo_create &lt;名称&gt; &lt;描述&gt; - 创建存储库
+• /repo_list - 列出所有存储库
+• /repo_info &lt;名称&gt; - 查看详情
+• /repo_delete &lt;名称&gt; - 删除存储库
+
+<b>转发目标</b>
+• /target_add &lt;库&gt; &lt;chat_id&gt; - 添加转发目标
+• /target_remove &lt;库&gt; &lt;chat_id&gt; - 移除目标
+• /target_list &lt;库&gt; - 列出目标
+• /target_toggle &lt;库&gt; &lt;chat_id&gt; - 启用/禁用
+
+<b>权限管理</b>
+• /perm_grant &lt;库&gt; &lt;user&gt; &lt;role&gt; - 授权
+• /perm_revoke &lt;库&gt; &lt;user&gt; - 撤销
+• /perm_list &lt;库&gt; - 列出授权
+
+<b>转发操作</b>
+• /use &lt;库名&gt; - 开启自动转发
+• /use off - 关闭自动转发
+• /forwarded_stats &lt;库&gt; - 查看统计
+• /forwarded_recent &lt;库&gt; - 最近记录
+
+<b>4. 验证类型:</b>
+• math - 数学题验证
+• button - 按钮选择
+• captcha - 验证码输入
+
+<b>5. 机器人检测维度 (10项):</b>
+• 官方 bot 标记
+• 垃圾关键词
+• 用户名模式
+• 快速加入
+• 数字/无效名称
+• 无头像/用户名
+• 新账号检测
+
+💡 <b>转发系统使用示例:</b>
+1. 创建存储库: /repo_create news 新闻频道
+2. 添加目标: /target_add news @your_channel
+3. 开启转发: /use news
+4. 发送内容即可自动转发！
+
+需要更多帮助？查看项目文档:
+https://github.com/ovws/oizhibot
+      `.trim()
+    );
+    return;
   }
 
-  // 视频库列表
-  async showRepoList(chatId, userId) {
-    const repos = await this.db.listRepositories(userId);
+  if (text === '/check') {
+    const detection = detectBot(user, { joinTime: Date.now() });
+    
+    const riskLevel = {
+      'high': '🔴 高风险',
+      'medium': '🟡 中风险',
+      'low': '🟢 低风险',
+      'none': '✅ 正常'
+    };
+
+    let detectionDetails = '';
+    if (detection.detections && detection.detections.length > 0) {
+      detectionDetails = '\n\n<b>检测到的问题:</b>\n' + 
+        detection.detections.map(d => `• ${d.type}: ${JSON.stringify(d)}`).join('\n');
+    }
+
+    await bot.sendMessage(
+      message.chat.id,
+      `🔍 <b>账号检测结果</b>
+
+👤 用户: ${user.first_name}${user.username ? ' (@' + user.username + ')' : ''}
+🆔 ID: <code>${user.id}</code>
+
+📊 可疑评分: <b>${detection.score}</b>/100
+⚠️ 风险等级: ${riskLevel[detection.level]}
+
+判定结果:
+${detection.isBot ? '❌ 识别为机器人账号' : detection.isSuspicious ? '⚠️ 有可疑行为，需验证' : '✅ 账号正常'}
+${detectionDetails}
+
+💡 提示: 你可以转发其他用户的消息给我来检测他们的账号
+      `.trim()
+    );
+    return;
+  }
+
+  if (text.startsWith('/repo_create')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 2) {
+      await bot.sendMessage(chatId, '用法: /repo_create <名称> <描述>');
+      return;
+    }
+    
+    const name = args[0];
+    const description = args.slice(1).join(' ');
+    
+    const result = await createForwardRepository(db, { name, description, created_by: userId });
+    
+    if (result.success) {
+      await bot.sendMessage(
+        chatId,
+        `✅ 存储库创建成功！
+
+📦 名称: ${name}
+📝 描述: ${description}
+
+💡 下一步:
+1. 添加转发目标: /target_add ${name} <chat_id>
+2. 授权用户: /perm_grant ${name} <user_id> <role>
+3. 开始转发: /use ${name}`
+      );
+    } else if (result.error === 'repository_exists') {
+      await bot.sendMessage(chatId, `❌ 存储库 "${name}" 已存在`);
+    } else {
+      await bot.sendMessage(chatId, `❌ 创建失败: ${result.error}`);
+    }
+    return;
+  }
+
+  if (text === '/repo_list') {
+    const repos = await listForwardRepositories(db, userId);
     
     if (repos.length === 0) {
-      await this.bot.sendMessage(chatId, '📦 你还没有视频库\n\n点击下方按钮创建第一个吧！', {
-        reply_markup: {
-          inline_keyboard: [[
-            { text: '➕ 创建视频库', callback_data: 'repo:create_start' },
-            { text: '🔙 返回', callback_data: 'menu:main' }
-          ]]
-        }
-      });
+      await bot.sendMessage(chatId, '📦 暂无存储库\n\n使用 /repo_create <名称> <描述> 创建第一个');
       return;
     }
     
-    const state = await this.db.getUserState(userId);
-    const currentRepo = state?.current_repo;
-    
-    let text = '📦 <b>你的视频库</b>\n\n';
-    const buttons = [];
-    
-    for (let i = 0; i < repos.length; i++) {
-      const repo = repos[i];
-      const status = (currentRepo === repo.name) ? ' ✅' : '';
-      const targets = await this.db.listTargets(repo.id);
-      const enabledCount = targets.filter(t => t.enabled).length;
-      const stats = await this.db.getStats(repo.id, 'today');
-      
-      text += `${i + 1}️⃣ <b>${repo.name}</b>${status}\n`;
-      text += `   🎯 ${enabledCount} 个目标`;
-      if (stats.total > 0) {
-        text += ` | 📊 今日 ${stats.total} 条`;
-      }
-      if (enabledCount === 0) {
-        text += ' ⚠️ 未设置';
-      }
-      text += '\n\n';
-      
-      buttons.push([
-        { text: `${i + 1}️⃣ ${repo.name}${status}`, callback_data: `repo:select:${repo.name}` }
-      ]);
+    let msg = '📦 <b>存储库列表</b>\n\n';
+    for (const repo of repos) {
+      const targets = await listForwardTargets(db, repo.id);
+      const enabledTargets = targets.filter(t => t.enabled);
+      msg += `📌 <b>${repo.name}</b>\n`;
+      msg += `   📝 ${repo.description || '无描述'}\n`;
+      msg += `   🎯 转发目标: ${enabledTargets.length}/${targets.length} 个启用\n`;
+      msg += `   👤 创建者: ${repo.created_by}\n\n`;
     }
+    msg += '\n💡 查看详情: /repo_info <名称>';
     
-    text += '━━━━━━━━━━━━━━━\n点击视频库查看详情';
-    
-    buttons.push([
-      { text: '➕ 创建新库', callback_data: 'repo:create_start' },
-      { text: '🔙 返回', callback_data: 'menu:main' }
-    ]);
-    
-    await this.bot.sendMessage(chatId, text, {
-      reply_markup: { inline_keyboard: buttons }
-    });
+    await bot.sendMessage(chatId, msg);
+    return;
   }
 
-  // 视频库详情
-  async showRepoDetails(chatId, userId, repoName) {
-    const repo = await this.db.getRepository(repoName);
-    
-    if (!repo) {
-      await this.bot.sendMessage(chatId, `❌ 视频库 "${repoName}" 不存在`);
+  if (text.startsWith('/repo_delete')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /repo_delete <名称>');
       return;
     }
     
-    const targets = await this.db.listTargets(repo.id);
-    const permissions = await this.db.listPermissions(repo.id);
-    const stats = await this.db.getStats(repo.id);
-    const todayStats = await this.db.getStats(repo.id, 'today');
-    const weekStats = await this.db.getStats(repo.id, 'week');
+    const name = args[0];
+    const repo = await getForwardRepository(db, name);
     
-    let text = `📦 <b>${repo.name}</b>\n\n`;
-    
-    if (repo.description) {
-      text += `📝 ${repo.description}\n`;
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${name}" 不存在`);
+      return;
     }
-    text += `👤 创建者: ${repo.created_by === userId ? '你' : repo.created_by}\n`;
-    text += `📅 创建于: ${new Date(repo.created_at).toLocaleDateString('zh-CN')}\n\n`;
     
-    // 转发目标
-    text += `🎯 <b>转发目标 (${targets.length})</b>\n`;
+    if (repo.created_by !== userId) {
+      await bot.sendMessage(chatId, '❌ 只有创建者可以删除存储库');
+      return;
+    }
+    
+    await deleteForwardRepository(db, name);
+    await bot.sendMessage(chatId, `✅ 存储库 "${name}" 已删除`);
+    return;
+  }
+
+  if (text.startsWith('/repo_info')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /repo_info <名称>');
+      return;
+    }
+    
+    const name = args[0];
+    const repo = await getForwardRepository(db, name);
+    
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${name}" 不存在`);
+      return;
+    }
+    
+    const targets = await listForwardTargets(db, repo.id);
+    const permissions = await listForwardPermissions(db, repo.id);
+    const stats = await getForwardedStats(db, repo.id);
+    
+    let msg = `📦 <b>存储库: ${repo.name}</b>\n\n`;
+    msg += `📝 描述: ${repo.description || '无'}\n`;
+    msg += `👤 创建者: ${repo.created_by}\n`;
+    msg += `📅 创建: ${new Date(repo.created_at).toLocaleString('zh-CN')}\n\n`;
+    
+    msg += `🎯 <b>转发目标 (${targets.length})</b>\n`;
     if (targets.length > 0) {
-      const enabled = targets.filter(t => t.enabled);
-      text += `   ✅ ${enabled.length} 个启用`;
-      if (enabled.length < targets.length) {
-        text += ` | ❌ ${targets.length - enabled.length} 个禁用`;
-      }
-      text += '\n';
-      
-      for (const target of targets.slice(0, 3)) {
+      for (const target of targets) {
         const status = target.enabled ? '✅' : '❌';
-        text += `   ${status} ${target.target_chat_id} (${target.target_type})\n`;
-      }
-      if (targets.length > 3) {
-        text += `   ... 还有 ${targets.length - 3} 个\n`;
+        msg += `${status} ${target.target_chat_id} (${target.target_type})\n`;
       }
     } else {
-      text += `   ⚠️ 还没有转发目标\n`;
+      msg += '   暂无目标\n';
     }
-    text += '\n';
     
-    // 授权用户
+    msg += `\n👥 <b>授权用户 (${permissions.length})</b>\n`;
     if (permissions.length > 0) {
-      text += `👥 <b>授权用户 (${permissions.length})</b>\n`;
-      for (const perm of permissions.slice(0, 3)) {
-        const roleEmoji = { admin: '👑', contributor: '✏️', viewer: '👀' };
-        text += `   ${roleEmoji[perm.role] || '•'} ${perm.user_id} (${perm.role})\n`;
+      for (const perm of permissions) {
+        msg += `   • ${perm.user_id} (${perm.role})\n`;
       }
-      if (permissions.length > 3) {
-        text += `   ... 还有 ${permissions.length - 3} 个\n`;
-      }
-      text += '\n';
-    }
-    
-    // 统计
-    text += `📊 <b>统计</b>\n`;
-    text += `   总计: ${stats.total} 条\n`;
-    text += `   本周: ${weekStats.total} 条\n`;
-    text += `   今日: ${todayStats.total} 条\n`;
-    
-    // 按钮
-    const hasTargets = targets.filter(t => t.enabled).length > 0;
-    const buttons = [];
-    
-    if (hasTargets) {
-      buttons.push([
-        { text: '🚀 开始使用', callback_data: `repo:use:${repo.name}` },
-        { text: '🎯 管理目标', callback_data: `repo:targets:${repo.name}` }
-      ]);
     } else {
-      buttons.push([
-        { text: '🎯 添加转发目标', callback_data: `target:add_start:${repo.name}` }
-      ]);
+      msg += '   暂无授权用户\n';
     }
     
-    buttons.push([
-      { text: '👥 授权用户', callback_data: `perm:manage:${repo.name}` },
-      { text: '📊 查看统计', callback_data: `stats:show:${repo.name}` }
-    ]);
+    msg += `\n📊 <b>统计</b>\n`;
+    msg += `   总转发: ${stats.total} 条\n`;
     
-    if (repo.created_by === userId) {
-      buttons.push([
-        { text: '✏️ 编辑', callback_data: `repo:edit:${repo.name}` },
-        { text: '🗑 删除', callback_data: `repo:delete_confirm:${repo.name}` }
-      ]);
-    }
-    
-    buttons.push([
-      { text: '🔙 返回列表', callback_data: 'menu:repos' }
-    ]);
-    
-    await this.bot.sendMessage(chatId, text, {
-      reply_markup: { inline_keyboard: buttons }
-    });
+    await bot.sendMessage(chatId, msg);
+    return;
   }
 
-  // 开始创建存储库
-  async startCreateRepo(chatId, userId) {
-    await this.db.setUserState(userId, {
-      mode: 'setup',
-      setup_step: 'creating_repo_name',
-      setup_data: {}
-    });
-    
-    await this.bot.sendMessage(
-      chatId,
-      `📦 <b>创建新视频库</b>\n\n请给视频库起个名字\n\n💡 比如：每日科技、搞笑视频、学习资料`,
-      {
-        reply_markup: {
-          inline_keyboard: [[
-            { text: '❌ 取消', callback_data: 'setup:cancel' }
-          ]]
-        }
-      }
-    );
-  }
-
-  // 处理创建存储库 - 名称
-  async handleCreatingRepoName(chatId, userId, text) {
-    const name = text.trim();
-    
-    if (name.length < 2 || name.length > 50) {
-      await this.bot.sendMessage(chatId, '❌ 名称长度应在 2-50 个字符之间\n\n请重新输入：');
+  if (text.startsWith('/target_add')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 2) {
+      await bot.sendMessage(chatId, '用法: /target_add <存储库> <目标chat_id>');
       return;
     }
     
-    const existing = await this.db.getRepository(name);
-    if (existing) {
-      await this.bot.sendMessage(chatId, `❌ 视频库 "${name}" 已存在\n\n请换个名字：`);
-      return;
-    }
+    const repoName = args[0];
+    const targetChatId = parseInt(args[1]);
     
-    await this.db.setUserState(userId, {
-      mode: 'setup',
-      setup_step: 'creating_repo_desc',
-      setup_data: { name }
-    });
-    
-    await this.bot.sendMessage(
-      chatId,
-      `✅ 名称：<b>${name}</b>\n\n现在，写一句简短的描述吧\n\n💡 比如：每天分享最新的科技新闻和产品测评`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '跳过', callback_data: 'repo:create_skip_desc' }],
-            [{ text: '❌ 取消', callback_data: 'setup:cancel' }]
-          ]
-        }
-      }
-    );
-  }
-
-  // 处理创建存储库 - 描述
-  async handleCreatingRepoDesc(chatId, userId, text) {
-    const state = await this.db.getUserState(userId);
-    const name = state?.setup_data?.name;
-    const description = text.trim();
-    
-    if (!name) {
-      await this.bot.sendMessage(chatId, '❌ 会话超时，请重新开始');
-      await this.db.clearUserState(userId);
-      return;
-    }
-    
-    const result = await this.db.createRepository(name, description || '无描述', userId);
-    
-    if (!result.success) {
-      await this.bot.sendMessage(chatId, `❌ 创建失败: ${result.error}`);
-      await this.db.clearUserState(userId);
-      return;
-    }
-    
-    await this.db.clearUserState(userId);
-    
-    await this.bot.sendMessage(
-      chatId,
-      `🎉 <b>视频库创建成功！</b>\n\n📦 ${name}\n📝 ${description || '无描述'}\n\n下一步要做什么？`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🎯 添加转发目标', callback_data: `target:add_start:${name}` }],
-            [{ text: '🚀 查看详情', callback_data: `repo:select:${name}` }],
-            [{ text: '🔙 返回主菜单', callback_data: 'menu:main' }]
-          ]
-        }
-      }
-    );
-  }
-
-  // 开始添加转发目标
-  async startAddTarget(chatId, userId, repoName) {
-    const repo = await this.db.getRepository(repoName);
+    const repo = await getForwardRepository(db, repoName);
     if (!repo) {
-      await this.bot.sendMessage(chatId, `❌ 视频库 "${repoName}" 不存在`);
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
       return;
     }
     
-    const hasPermission = await this.db.checkPermission(repo.id, userId, 'admin');
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'admin');
     if (!hasPermission) {
-      await this.bot.sendMessage(chatId, '❌ 只有管理员可以添加转发目标');
+      await bot.sendMessage(chatId, '❌ 只有管理员可以添加转发目标');
       return;
     }
-    
-    await this.db.setUserState(userId, {
-      mode: 'setup',
-      setup_step: 'adding_target',
-      setup_data: { repo_name: repoName, repo_id: repo.id }
-    });
-    
-    await this.bot.sendMessage(
-      chatId,
-      `🎯 <b>添加转发目标</b>\n\n请执行以下步骤：\n\n1️⃣ 将我添加到你的频道/群组\n2️⃣ 确保我有"发送消息"权限\n3️⃣ <b>转发该频道的任意一条消息给我</b>\n\n或者，直接发送频道 ID\n格式：-100xxx (数字)`,
-      {
-        reply_markup: {
-          inline_keyboard: [[
-            { text: '❌ 取消', callback_data: 'setup:cancel' }
-          ]]
-        }
-      }
-    );
-  }
 
-  // 处理添加转发目标
-  async handleAddingTarget(chatId, userId, message) {
-    const state = await this.db.getUserState(userId);
-    const repoId = state?.setup_data?.repo_id;
-    const repoName = state?.setup_data?.repo_name;
-    
-    if (!repoId) {
-      await this.bot.sendMessage(chatId, '❌ 会话超时，请重新开始');
-      await this.db.clearUserState(userId);
-      return;
-    }
-    
-    let targetChatId = null;
     let targetType = 'group';
-    let targetInfo = '';
-    
-    // 检测是转发消息还是文本ID
-    if (message.forward_from_chat) {
-      const forwardedChat = message.forward_from_chat;
-      targetChatId = forwardedChat.id;
-      targetType = forwardedChat.type === 'channel' ? 'channel' : 'group';
-      targetInfo = forwardedChat.title || forwardedChat.username || String(targetChatId);
-      
-      await this.bot.sendMessage(chatId, `🔍 检测到${targetType === 'channel' ? '频道' : '群组'}：<b>${targetInfo}</b>\n\n正在测试发送权限...`);
-    } else if (message.text) {
-      const text = message.text.trim();
-      targetChatId = parseInt(text);
-      
-      if (isNaN(targetChatId)) {
-        await this.bot.sendMessage(chatId, '❌ 无效的 ID 格式\n\n请转发频道消息，或发送数字 ID（-100xxx）');
-        return;
-      }
-      
-      targetType = targetChatId > 0 ? 'private' : (String(targetChatId).startsWith('-100') ? 'channel' : 'group');
-      targetInfo = String(targetChatId);
-      
-      await this.bot.sendMessage(chatId, `正在测试发送到 ${targetInfo}...`);
-    } else {
-      await this.bot.sendMessage(chatId, '❌ 请转发频道消息，或发送频道 ID');
-      return;
+    if (targetChatId > 0) {
+      targetType = 'private';
+    } else if (String(targetChatId).startsWith('-100')) {
+      targetType = 'channel';
     }
-    
-    // 测试发送消息
+
     try {
-      await this.bot.sendMessage(
+      await bot.sendMessage(
         targetChatId,
-        `✅ <b>转发目标已添加！</b>\n\n📦 视频库: ${repoName}\n\n现在此${targetType === 'channel' ? '频道' : '群组'}会收到转发到该视频库的内容。`
+        `✅ 转发目标已添加！\n\n📦 存储库: ${repoName}\n\n现在此${targetType === 'channel' ? '频道' : '群组'}会收到转发到该存储库的内容。`
       );
     } catch (error) {
-      await this.bot.sendMessage(
+      await bot.sendMessage(
         chatId,
-        `❌ 无法发送消息到目标\n\n可能的原因：\n• Bot 未被添加到${targetType === 'channel' ? '频道' : '群组'}\n• Bot 没有发送消息权限\n• Chat ID 不正确\n\n请重新尝试或取消`,
-        {
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '❌ 取消', callback_data: 'setup:cancel' }
-            ]]
-          }
-        }
+        `❌ 无法发送消息到目标 ${targetChatId}\n\n请确保:\n1. Bot 已加入目标群组/频道\n2. Bot 有发送消息权限\n3. Chat ID 正确\n\n错误: ${error.message}`
       );
       return;
     }
     
-    await this.db.addTarget(repoId, targetChatId, targetType);
-    await this.db.clearUserState(userId);
+    await addForwardTarget(db, repo.id, targetChatId, targetType);
     
-    await this.bot.sendMessage(
+    await bot.sendMessage(
       chatId,
-      `✅ <b>转发目标已添加！</b>\n\n📦 视频库: ${repoName}\n🎯 目标: ${targetInfo} (${targetType})\n\n下一步？`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '➕ 再添加一个', callback_data: `target:add_start:${repoName}` }],
-            [{ text: '🚀 开始使用', callback_data: `repo:use:${repoName}` }],
-            [{ text: '🔙 返回详情', callback_data: `repo:select:${repoName}` }]
-          ]
-        }
-      }
+      `✅ 转发目标已添加！\n\n📦 存储库: ${repoName}\n🎯 目标: ${targetChatId} (${targetType})`
     );
+    return;
   }
 
-  // 开始使用（进入转发模式）
-  async startForwarding(chatId, userId, repoName) {
-    const repo = await this.db.getRepository(repoName);
+  if (text.startsWith('/target_remove')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 2) {
+      await bot.sendMessage(chatId, '用法: /target_remove <存储库> <目标chat_id>');
+      return;
+    }
+    
+    const repoName = args[0];
+    const targetChatId = parseInt(args[1]);
+    
+    const repo = await getForwardRepository(db, repoName);
     if (!repo) {
-      await this.bot.sendMessage(chatId, `❌ 视频库 "${repoName}" 不存在`);
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
       return;
     }
     
-    const hasPermission = await this.db.checkPermission(repo.id, userId, 'contributor');
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'admin');
     if (!hasPermission) {
-      await this.bot.sendMessage(chatId, '❌ 你没有转发权限');
+      await bot.sendMessage(chatId, '❌ 只有管理员可以移除转发目标');
       return;
     }
     
-    const targets = await this.db.listTargets(repo.id);
+    await removeForwardTarget(db, repo.id, targetChatId);
+    await bot.sendMessage(chatId, `✅ 转发目标 ${targetChatId} 已移除`);
+    return;
+  }
+
+  if (text.startsWith('/target_list')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /target_list <存储库>');
+      return;
+    }
+    
+    const repoName = args[0];
+    const repo = await getForwardRepository(db, repoName);
+    
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const targets = await listForwardTargets(db, repo.id);
+    
+    if (targets.length === 0) {
+      await bot.sendMessage(chatId, `📦 存储库 "${repoName}" 暂无转发目标`);
+      return;
+    }
+    
+    let msg = `🎯 <b>存储库 "${repoName}" 的转发目标</b>\n\n`;
+    for (const target of targets) {
+      const status = target.enabled ? '✅ 启用' : '❌ 禁用';
+      msg += `${status}\n`;
+      msg += `   ID: ${target.target_chat_id}\n`;
+      msg += `   类型: ${target.target_type}\n`;
+      msg += `   创建: ${new Date(target.created_at).toLocaleString('zh-CN')}\n\n`;
+    }
+    
+    await bot.sendMessage(chatId, msg);
+    return;
+  }
+
+  if (text.startsWith('/target_toggle')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 2) {
+      await bot.sendMessage(chatId, '用法: /target_toggle <存储库> <目标chat_id>');
+      return;
+    }
+    
+    const repoName = args[0];
+    const targetChatId = parseInt(args[1]);
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'admin');
+    if (!hasPermission) {
+      await bot.sendMessage(chatId, '❌ 只有管理员可以切换目标状态');
+      return;
+    }
+    
+    await toggleForwardTarget(db, repo.id, targetChatId);
+    await bot.sendMessage(chatId, `✅ 转发目标 ${targetChatId} 状态已切换`);
+    return;
+  }
+
+  if (text.startsWith('/perm_grant')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 3) {
+      await bot.sendMessage(chatId, '用法: /perm_grant <存储库> <user_id> <role>\n角色: admin, contributor, viewer');
+      return;
+    }
+    
+    const repoName = args[0];
+    const targetUserId = parseInt(args[1]);
+    const role = args[2];
+    
+    if (!['admin', 'contributor', 'viewer'].includes(role)) {
+      await bot.sendMessage(chatId, '❌ 角色必须是: admin, contributor, viewer');
+      return;
+    }
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'admin');
+    if (!hasPermission) {
+      await bot.sendMessage(chatId, '❌ 只有管理员可以授予权限');
+      return;
+    }
+    
+    await grantForwardPermission(db, repo.id, targetUserId, role, userId);
+    await bot.sendMessage(chatId, `✅ 已授予用户 ${targetUserId} "${role}" 权限`);
+    return;
+  }
+
+  if (text.startsWith('/perm_revoke')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 2) {
+      await bot.sendMessage(chatId, '用法: /perm_revoke <存储库> <user_id>');
+      return;
+    }
+    
+    const repoName = args[0];
+    const targetUserId = parseInt(args[1]);
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'admin');
+    if (!hasPermission) {
+      await bot.sendMessage(chatId, '❌ 只有管理员可以撤销权限');
+      return;
+    }
+    
+    await revokeForwardPermission(db, repo.id, targetUserId);
+    await bot.sendMessage(chatId, `✅ 已撤销用户 ${targetUserId} 的权限`);
+    return;
+  }
+
+  if (text.startsWith('/perm_list')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /perm_list <存储库>');
+      return;
+    }
+    
+    const repoName = args[0];
+    const repo = await getForwardRepository(db, repoName);
+    
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const permissions = await listForwardPermissions(db, repo.id);
+    
+    let msg = `👥 <b>存储库 "${repoName}" 的授权用户</b>\n\n`;
+    msg += `👤 创建者: ${repo.created_by} (admin)\n\n`;
+    
+    if (permissions.length > 0) {
+      for (const perm of permissions) {
+        msg += `• ${perm.user_id} - ${perm.role}\n`;
+        msg += `  授予者: ${perm.granted_by}\n`;
+        msg += `  时间: ${new Date(perm.granted_at).toLocaleString('zh-CN')}\n\n`;
+      }
+    } else {
+      msg += '暂无其他授权用户\n';
+    }
+    
+    await bot.sendMessage(chatId, msg);
+    return;
+  }
+
+  if (text.startsWith('/use')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /use <存储库名称> 或 /use off');
+      return;
+    }
+    
+    const repoName = args[0];
+    
+    if (repoName === 'off') {
+      userCurrentRepo.delete(userId);
+      await bot.sendMessage(chatId, '✅ 已关闭自动转发');
+      return;
+    }
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'contributor');
+    if (!hasPermission) {
+      await bot.sendMessage(chatId, '❌ 你没有向此存储库发送内容的权限');
+      return;
+    }
+    
+    userCurrentRepo.set(userId, repoName);
+    
+    const targets = await listForwardTargets(db, repo.id);
+    const enabledTargets = targets.filter(t => t.enabled);
+    
+    await bot.sendMessage(
+      chatId,
+      `✅ <b>当前存储库: ${repoName}</b>\n\n现在发送的所有消息都会转发到此存储库的 ${enabledTargets.length} 个目标\n\n发送 /use off 关闭自动转发`
+    );
+    return;
+  }
+
+  if (text.startsWith('/forwarded_stats')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /forwarded_stats <存储库> [period]\nperiod: today, week, all');
+      return;
+    }
+    
+    const repoName = args[0];
+    const period = args[1] || 'all';
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const stats = await getForwardedStats(db, repo.id, period);
+    
+    let msg = `📊 <b>${repoName} 转发统计</b>\n\n`;
+    msg += `📅 周期: ${period === 'today' ? '今天' : period === 'week' ? '本周' : '总计'}\n`;
+    msg += `📝 总计: ${stats.total} 条\n\n`;
+    
+    if (stats.byType.length > 0) {
+      msg += `📝 <b>内容类型</b>\n`;
+      for (const type of stats.byType) {
+        const percentage = ((type.count / stats.total) * 100).toFixed(1);
+        msg += `   ${type.message_type}: ${type.count} 条 (${percentage}%)\n`;
+      }
+      msg += '\n';
+    }
+    
+    if (stats.byUser.length > 0) {
+      msg += `👥 <b>贡献者排名</b>\n`;
+      for (let i = 0; i < Math.min(5, stats.byUser.length); i++) {
+        const userStat = stats.byUser[i];
+        msg += `   ${i + 1}. ${userStat.source_user_id}: ${userStat.count} 条\n`;
+      }
+    }
+    
+    await bot.sendMessage(chatId, msg);
+    return;
+  }
+
+  if (text.startsWith('/forwarded_recent')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /forwarded_recent <存储库> [limit]');
+      return;
+    }
+    
+    const repoName = args[0];
+    const limit = parseInt(args[1]) || 10;
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const recent = await getRecentForwarded(db, repo.id, limit);
+    
+    if (recent.length === 0) {
+      await bot.sendMessage(chatId, `📜 存储库 "${repoName}" 暂无转发记录`);
+      return;
+    }
+    
+    let msg = `📜 <b>${repoName} 最近转发 (${recent.length}条)</b>\n\n`;
+    
+    for (let i = 0; i < recent.length; i++) {
+      const record = recent[i];
+      const timeAgo = getTimeAgo(record.forwarded_at);
+      msg += `${i + 1}. ${timeAgo}\n`;
+      msg += `   用户: ${record.source_user_id}\n`;
+      msg += `   类型: ${record.message_type}\n\n`;
+    }
+    
+    await bot.sendMessage(chatId, msg);
+    return;
+  }
+
+  const currentRepo = userCurrentRepo.get(userId);
+  if (currentRepo && !text.startsWith('/')) {
+    
+    const repo = await getForwardRepository(db, currentRepo);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${currentRepo}" 不存在`);
+      userCurrentRepo.delete(userId);
+      return;
+    }
+
+    const targets = await listForwardTargets(db, repo.id);
     const enabledTargets = targets.filter(t => t.enabled);
     
     if (enabledTargets.length === 0) {
-      await this.bot.sendMessage(chatId, '❌ 该视频库还没有启用的转发目标');
+      await bot.sendMessage(chatId, '❌ 此存储库没有启用的转发目标');
       return;
     }
-    
-    await this.db.setUserState(userId, {
-      mode: 'forwarding',
-      current_repo: repoName,
-      message_count: 0
-    });
-    
-    await this.bot.sendMessage(
-      chatId,
-      `🚀 <b>已开启自动转发模式</b>\n\n📦 当前视频库：${repoName}\n🎯 转发到 ${enabledTargets.length} 个目标\n\n现在，直接发送任何内容给我，我会自动转发！\n\n━━━━━━━━━━━━━━━\n支持的内容：\n✅ 文字、图片、视频\n✅ 文档、音频、贴纸\n\n发送 /stop 暂停转发`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '⏸ 暂停', callback_data: 'forward:stop' },
-              { text: '🔄 切换库', callback_data: 'menu:repos' }
-            ],
-            [
-              { text: '📊 统计', callback_data: `stats:show:${repoName}` }
-            ]
-          ]
-        }
-      }
+
+    const results = await Promise.allSettled(
+      enabledTargets.map(target => 
+        bot.forwardMessage(target.target_chat_id, chatId, message.message_id)
+      )
     );
+
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.filter(r => r.status === 'rejected').length;
+
+    await logForwardedMessage(db, {
+      repository_id: repo.id,
+      source_user_id: userId,
+      source_message_id: message.message_id,
+      message_type: getMessageType(message),
+      forwarded_to: enabledTargets.map(t => t.target_chat_id),
+      metadata: { successful, failed }
+    });
+
+    let confirmMsg = `✅ 已转发到 ${currentRepo}\n\n`;
+    confirmMsg += `成功: ${successful} 个目标\n`;
+    if (failed > 0) {
+      confirmMsg += `失败: ${failed} 个目标\n`;
+    }
+
+    await bot.sendMessage(chatId, confirmMsg);
+    return;
   }
 
-  // 处理转发模式下的消息
-  async handleForwarding(chatId, userId, message) {
-    const state = await this.db.getUserState(userId);
-    const repoName = state?.current_repo;
+  if (message.forward_from) {
+    const targetUser = message.forward_from;
+    const detection = detectBot(targetUser, { joinTime: Date.now() });
     
-    if (!repoName) {
-      await this.bot.sendMessage(chatId, '❌ 会话状态异常，请重新开始');
-      await this.db.clearUserState(userId);
+    const riskLevel = {
+      'high': '🔴 高风险',
+      'medium': '🟡 中风险', 
+      'low': '🟢 低风险',
+      'none': '✅ 正常'
+    };
+
+    let detectionDetails = '';
+    if (detection.detections && detection.detections.length > 0) {
+      detectionDetails = '\n\n<b>检测到的问题:</b>\n' + 
+        detection.detections.map(d => {
+          const typeNames = {
+            'username_pattern': '用户名模式异常',
+            'no_username': '无用户名',
+            'invalid_first_name': '名称无效',
+            'numeric_name': '纯数字名称',
+            'fast_join': '快速加入',
+            'no_profile_photo': '无头像',
+            'new_account_id': '新账号',
+            'official_bot_flag': '官方Bot标记',
+            'spam_keyword': '垃圾关键词'
+          };
+          return `• ${typeNames[d.type] || d.type}`;
+        }).join('\n');
+    }
+
+    const isBlacklist = await isBlacklisted(db, targetUser.id);
+
+    await bot.sendMessage(
+      message.chat.id,
+      `🔍 <b>用户检测结果</b>
+
+👤 用户: ${targetUser.first_name}${targetUser.username ? ' (@' + targetUser.username + ')' : ''}
+🆔 ID: <code>${targetUser.id}</code>
+${isBlacklist ? '🚫 <b>该用户在黑名单中</b>\n' : ''}
+📊 可疑评分: <b>${detection.score}</b>/100
+⚠️ 风险等级: ${riskLevel[detection.level]}
+
+判定结果:
+${detection.isBot ? '❌ 识别为机器人账号' : detection.isSuspicious ? '⚠️ 有可疑行为，建议验证' : '✅ 账号正常'}
+${detectionDetails}
+
+💡 <b>建议操作:</b>
+${detection.isBot ? '立即封禁此用户' : detection.isSuspicious ? '加入群组时需要验证' : '可以正常加入群组'}
+      `.trim()
+    );
+    return;
+  }
+
+  const verification = await getUserVerification(db, user.id);
+
+  if (!verification || verification.status !== 'pending') {
+    await bot.sendMessage(
+      message.chat.id,
+      `💬 你当前没有待验证的请求
+
+🔍 你可以:
+• /check - 检测自己的账号
+• 转发消息给我 - 检测其他用户
+• /help - 查看帮助文档
+      `.trim()
+    );
+    return;
+  }
+
+  if (text.toLowerCase() === verification.verification_code.toLowerCase()) {
+    await updateVerificationStatus(db, user.id, 'verified');
+    await bot.unrestrictChatMember(verification.chat_id, user.id);
+
+    await bot.sendMessage(message.chat.id, '✅ 验证成功！你现在可以在群组中发言了。');
+    await bot.sendMessage(
+      verification.chat_id,
+      `✅ ${user.first_name} 已通过验证，欢迎加入！`
+    );
+  } else {
+    await incrementAttempts(db, user.id);
+    const verification_updated = await getUserVerification(db, user.id);
+
+    if (verification_updated.attempts >= 3) {
+      await updateVerificationStatus(db, user.id, 'failed');
+      await bot.kickChatMember(verification.chat_id, user.id);
+      await addToBlacklist(db, user.id, 'Failed verification', null);
+
+      await bot.sendMessage(
+        message.chat.id,
+        '❌ 验证失败次数过多，你已被移出群组。'
+      );
+    } else {
+      await bot.sendMessage(
+        message.chat.id,
+        `❌ 答案错误，还剩 ${3 - verification_updated.attempts} 次机会`
+      );
+    }
+  }
+}
+
+async function handleGroupMessage(message, bot, db) {
+  const user = message.from;
+  const text = message.text?.trim();
+  const chatId = message.chat.id;
+
+  if (text && text.startsWith('/')) {
+    try {
+      const chatMember = await bot.getChatMember(chatId, user.id);
+      const isAdmin = ['creator', 'administrator'].includes(chatMember.status);
+      
+      if (isAdmin) {
+        await handleAdminCommand(message, bot, db);
+        return;
+      }
+    } catch (error) {
+      console.error('Error checking admin status:', error);
+    }
+  }
+
+  const verification = await getUserVerification(db, user.id);
+
+  if (verification && verification.status === 'pending') {
+    await bot.deleteMessage(message.chat.id, message.message_id);
+  }
+}
+
+async function handleAdminCommand(message, bot, db) {
+  const text = message.text.trim();
+  const chatId = message.chat.id;
+  const args = text.split(' ');
+  const command = args[0];
+
+  try {
+    
+    if (command === '/verify_config') {
+      const type = args[1];
+
+      if (['math', 'button', 'captcha'].includes(type)) {
+        await db.prepare(`
+          INSERT INTO group_configs (chat_id, verification_type, timeout_seconds, auto_ban_bots, bot_detection_level, updated_at)
+          VALUES (?, ?, 300, 1, 'medium', ?)
+          ON CONFLICT(chat_id) DO UPDATE SET 
+            verification_type = excluded.verification_type,
+            updated_at = excluded.updated_at
+        `).bind(chatId, type, Date.now()).run();
+
+        await bot.sendMessage(chatId, `✅ 验证方式已设置为: ${type}\n\n可选类型:\n• math - 数学题\n• button - 按钮选择\n• captcha - 验证码输入`);
+      } else {
+        await bot.sendMessage(
+          chatId,
+          '❌ 用法: /verify_config <类型>\n\n可选类型:\n• math - 数学题\n• button - 按钮选择\n• captcha - 验证码输入'
+        );
+      }
       return;
     }
-    
-    const repo = await this.db.getRepository(repoName);
-    if (!repo) {
-      await this.bot.sendMessage(chatId, `❌ 视频库 "${repoName}" 不存在`);
-      await this.db.clearUserState(userId);
+
+    if (command === '/verify_timeout') {
+      const seconds = parseInt(args[1]);
+
+      if (seconds && seconds >= 60 && seconds <= 600) {
+        await db.prepare(`
+          INSERT INTO group_configs (chat_id, verification_type, timeout_seconds, auto_ban_bots, bot_detection_level, updated_at)
+          VALUES (?, 'math', ?, 1, 'medium', ?)
+          ON CONFLICT(chat_id) DO UPDATE SET 
+            timeout_seconds = excluded.timeout_seconds,
+            updated_at = excluded.updated_at
+        `).bind(chatId, seconds, Date.now()).run();
+
+        await bot.sendMessage(chatId, `✅ 验证超时时间已设置为: ${seconds}秒 (${Math.floor(seconds/60)}分钟)`);
+      } else {
+        await bot.sendMessage(chatId, '❌ 用法: /verify_timeout <秒数>\n\n范围: 60-600 秒 (1-10分钟)');
+      }
       return;
     }
-    
-    const targets = await this.db.listTargets(repo.id);
-    const enabledTargets = targets.filter(t => t.enabled);
-    
-    let successCount = 0;
-    let failCount = 0;
-    
-    for (const target of enabledTargets) {
-      try {
-        const result = await this.bot.copyMessage(chatId, target.target_chat_id, message.message_id);
-        if (result.ok) {
-          await this.db.logForward(repo.id, chatId, message.message_id, target.target_chat_id, result.result.message_id, userId);
-          successCount++;
+
+    if (command === '/autoban') {
+      const enabled = args[1] === 'on' ? 1 : 0;
+
+      await db.prepare(`
+        INSERT INTO group_configs (chat_id, verification_type, timeout_seconds, auto_ban_bots, bot_detection_level, updated_at)
+        VALUES (?, 'math', 300, ?, 'medium', ?)
+        ON CONFLICT(chat_id) DO UPDATE SET 
+          auto_ban_bots = excluded.auto_ban_bots,
+          updated_at = excluded.updated_at
+      `).bind(chatId, enabled, Date.now()).run();
+
+      await bot.sendMessage(
+        chatId,
+        `✅ 自动封禁机器人已${enabled ? '开启' : '关闭'}\n\n${enabled ? '⚠️ 高可疑度账号将被自动踢出' : '📝 所有新成员都需要完成验证'}`
+      );
+      return;
+    }
+
+    if (command === '/blacklist') {
+      const blacklist = await db.prepare(`
+        SELECT user_id, reason, banned_at 
+        FROM blacklist 
+        ORDER BY banned_at DESC 
+        LIMIT 20
+      `).all();
+
+      if (!blacklist.results || blacklist.results.length === 0) {
+        await bot.sendMessage(chatId, '📋 黑名单为空');
+        return;
+      }
+
+      const list = blacklist.results.map((item, i) => 
+        `${i+1}. ID: <code>${item.user_id}</code>\n   原因: ${item.reason}\n   时间: ${new Date(item.banned_at).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'})}`
+      ).join('\n\n');
+
+      await bot.sendMessage(chatId, `📋 黑名单 (最近20条):\n\n${list}`);
+      return;
+    }
+
+    if (command === '/unban') {
+      const userId = parseInt(args[1]);
+
+      if (userId) {
+        const result = await db.prepare('DELETE FROM blacklist WHERE user_id = ?')
+          .bind(userId)
+          .run();
+        
+        if (result.changes > 0) {
+          await bot.sendMessage(chatId, `✅ 已将用户 <code>${userId}</code> 从黑名单移除`);
         } else {
-          failCount++;
+          await bot.sendMessage(chatId, `❌ 用户 <code>${userId}</code> 不在黑名单中`);
         }
-      } catch (error) {
-        console.error(`Forward to ${target.target_chat_id} failed:`, error);
-        failCount++;
+      } else {
+        await bot.sendMessage(chatId, '❌ 用法: /unban <用户ID>');
       }
+      return;
     }
-    
-    // 更新消息计数
-    await this.db.setUserState(userId, {
-      mode: 'forwarding',
-      current_repo: repoName,
-      message_count: (state.message_count || 0) + 1
-    });
-    
-    const resultText = successCount > 0 
-      ? `✅ 已转发到 ${successCount} 个目标${failCount > 0 ? `（${failCount} 个失败）` : ''}`
-      : `❌ 转发失败`;
-    
-    await this.bot.sendMessage(
-      chatId,
-      `${resultText}\n\n📦 ${repoName}\n📊 本次共 ${state.message_count + 1} 条`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '⏸ 暂停', callback_data: 'forward:stop' },
-              { text: '🔄 切换库', callback_data: 'menu:repos' }
-            ]
-          ]
+
+    if (command === '/ban') {
+      const userId = parseInt(args[1]);
+      const reason = args.slice(2).join(' ') || '管理员手动封禁';
+
+      if (userId) {
+        await addToBlacklist(db, userId, reason, message.from.id);
+
+        try {
+          await bot.kickChatMember(chatId, userId);
+          await bot.sendMessage(chatId, `✅ 已封禁用户 <code>${userId}</code> 并移出群组\n原因: ${reason}`);
+        } catch (error) {
+          await bot.sendMessage(chatId, `✅ 已将用户 <code>${userId}</code> 加入黑名单\n原因: ${reason}\n\n⚠️ 该用户当前不在群组中`);
         }
+      } else {
+        await bot.sendMessage(chatId, '❌ 用法: /ban <用户ID> [原因]');
       }
-    );
+      return;
+    }
+
+    if (command === '/stats') {
+      const stats = await db.prepare(`
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) as verified,
+          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending
+        FROM verifications
+        WHERE chat_id = ?
+      `).bind(chatId).first();
+
+      const botCount = await db.prepare(`
+        SELECT COUNT(*) as count
+        FROM bot_detection_log
+        WHERE chat_id = ? AND action = 'auto_ban'
+      `).bind(chatId).first();
+
+      const blacklistCount = await db.prepare(`
+        SELECT COUNT(*) as count FROM blacklist
+      `).first();
+
+      await bot.sendMessage(chatId, `
+📊 群组统计信息
+
+👥 验证记录:
+• 总数: ${stats?.total || 0}
+• ✅ 通过: ${stats?.verified || 0}
+• ❌ 失败: ${stats?.failed || 0}
+• ⏳ 待验证: ${stats?.pending || 0}
+
+🤖 机器人检测:
+• 自动封禁: ${botCount?.count || 0}
+
+🚫 黑名单:
+• 总数: ${blacklistCount?.count || 0}
+      `.trim());
+      return;
+    }
+
+    if (command === '/config') {
+      const config = await getGroupConfig(db, chatId);
+      
+      const typeNames = {
+        'math': '数学题',
+        'button': '按钮选择',
+        'captcha': '验证码输入'
+      };
+
+      await bot.sendMessage(chatId, `
+⚙️ 群组当前配置
+
+🔐 验证方式: ${typeNames[config.verification_type] || config.verification_type}
+⏱ 超时时间: ${config.timeout_seconds}秒 (${Math.floor(config.timeout_seconds/60)}分钟)
+🤖 自动封禁: ${config.auto_ban_bots ? '开启' : '关闭'}
+📊 检测级别: ${config.bot_detection_level}
+
+修改配置:
+• /verify_config <math|button|captcha>
+• /verify_timeout <秒数>
+• /autoban <on|off>
+      `.trim());
+      return;
+    }
+
+    if (command === '/help' || command === '/admin') {
+      await bot.sendMessage(chatId, `
+🤖 管理员命令列表
+
+📝 配置命令:
+• /config - 查看当前配置
+• /verify_config <类型> - 设置验证方式
+• /verify_timeout <秒> - 设置超时时间
+• /autoban <on|off> - 自动封禁开关
+
+🚫 黑名单管理:
+• /blacklist - 查看黑名单
+• /ban <用户ID> [原因] - 封禁用户
+• /unban <用户ID> - 解除封禁
+
+📊 统计信息:
+• /stats - 查看群组统计
+
+💡 提示:
+• 所有命令仅管理员可用
+• 修改配置后立即生效
+• 黑名单全局生效
+      `.trim());
+      return;
+    }
+
+  } catch (error) {
+    console.error('Error handling admin command:', error);
+    await bot.sendMessage(chatId, `❌ 命令执行失败: ${error.message}`);
   }
 }
 
-// ==================== 主处理器 ====================
-
-async function handleUpdate(update, env) {
-  const bot = new TelegramAPI(env.TELEGRAM_BOT_TOKEN);
-  const db = new Database(env.DB);
-  const handler = new ConversationalHandler(bot, db);
-  
-  // 初始化数据库
-  await db.initTables();
-  
-  // 处理普通消息
-  if (update.message) {
-    const message = update.message;
-    const chatId = message.chat.id;
-    const userId = message.from.id;
-    const isPrivate = message.chat.type === 'private';
-    
-    // 只处理私聊
-    if (!isPrivate) return;
-    
-    // 命令处理
-    if (message.text && message.text.startsWith('/')) {
-      const command = message.text.split(' ')[0].substring(1);
-      
-      if (command === 'start') {
-        await handler.showMainMenu(chatId, userId);
-        return;
-      }
-      
-      if (command === 'stop') {
-        await db.clearUserState(userId);
-        await bot.sendMessage(chatId, '⏸ 已暂停转发\n\n使用 /start 返回主菜单');
-        return;
-      }
-      
-      if (command === 'help') {
-        await bot.sendMessage(
-          chatId,
-          `❓ <b>帮助</b>\n\n📦 <b>视频库</b>\n视频库是内容的容器，可以设置多个转发目标\n\n🎯 <b>转发目标</b>\n频道或群组，接收转发的内容\n\n🚀 <b>使用方法</b>\n1. 创建视频库\n2. 添加转发目标\n3. 开始转发\n4. 发送内容自动转发\n\n━━━━━━━━━━━━━━━\n更多帮助请访问文档`,
-          {
-            reply_markup: {
-              inline_keyboard: [[
-                { text: '🔙 返回主菜单', callback_data: 'menu:main' }
-              ]]
-            }
-          }
-        );
-        return;
-      }
-    }
-    
-    // 获取用户状态
-    const state = await db.getUserState(userId);
-    
-    // 转发模式
-    if (state && state.mode === 'forwarding') {
-      await handler.handleForwarding(chatId, userId, message);
-      return;
-    }
-    
-    // 设置模式
-    if (state && state.mode === 'setup') {
-      if (state.setup_step === 'creating_repo_name') {
-        await handler.handleCreatingRepoName(chatId, userId, message.text);
-        return;
-      }
-      
-      if (state.setup_step === 'creating_repo_desc') {
-        await handler.handleCreatingRepoDesc(chatId, userId, message.text);
-        return;
-      }
-      
-      if (state.setup_step === 'adding_target') {
-        await handler.handleAddingTarget(chatId, userId, message);
-        return;
-      }
-    }
-    
-    // 默认：显示主菜单
-    await handler.showMainMenu(chatId, userId);
-  }
-  
-  // 处理回调查询（按钮点击）
-  if (update.callback_query) {
-    const query = update.callback_query;
-    const chatId = query.message.chat.id;
-    const userId = query.from.id;
-    const data = query.data;
-    
-    await bot.answerCallbackQuery(query.id);
-    
-    const [action, ...params] = data.split(':');
-    
-    // 菜单导航
-    if (action === 'menu') {
-      if (params[0] === 'main') {
-        await handler.showMainMenu(chatId, userId);
-      } else if (params[0] === 'repos') {
-        await handler.showRepoList(chatId, userId);
-      } else if (params[0] === 'help') {
-        await bot.sendMessage(
-          chatId,
-          `❓ <b>帮助</b>\n\n📦 <b>视频库</b>\n视频库是内容的容器，可以设置多个转发目标\n\n🎯 <b>转发目标</b>\n频道或群组，接收转发的内容\n\n🚀 <b>使用方法</b>\n1. 创建视频库\n2. 添加转发目标\n3. 开始转发\n4. 发送内容自动转发`,
-          {
-            reply_markup: {
-              inline_keyboard: [[
-                { text: '🔙 返回主菜单', callback_data: 'menu:main' }
-              ]]
-            }
-          }
-        );
-      }
-      return;
-    }
-    
-    // 存储库操作
-    if (action === 'repo') {
-      if (params[0] === 'create_start') {
-        await handler.startCreateRepo(chatId, userId);
-      } else if (params[0] === 'create_skip_desc') {
-        await handler.handleCreatingRepoDesc(chatId, userId, '');
-      } else if (params[0] === 'select') {
-        await handler.showRepoDetails(chatId, userId, params[1]);
-      } else if (params[0] === 'use') {
-        await handler.startForwarding(chatId, userId, params[1]);
-      }
-      return;
-    }
-    
-    // 转发目标操作
-    if (action === 'target') {
-      if (params[0] === 'add_start') {
-        await handler.startAddTarget(chatId, userId, params[1]);
-      }
-      return;
-    }
-    
-    // 设置取消
-    if (action === 'setup') {
-      if (params[0] === 'cancel') {
-        await db.clearUserState(userId);
-        await bot.sendMessage(chatId, '❌ 已取消\n\n使用 /start 返回主菜单');
-      }
-      return;
-    }
-    
-    // 转发控制
-    if (action === 'forward') {
-      if (params[0] === 'stop') {
-        await db.clearUserState(userId);
-        await bot.sendMessage(chatId, '⏸ 已暂停转发\n\n使用 /start 返回主菜单');
-      }
-      return;
-    }
-  }
-}
-
-// ==================== Worker 入口 ====================
+const userCurrentRepo = new Map(); 
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    
-    // CORS 处理
+
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    };
+
     if (request.method === 'OPTIONS') {
       return new Response(null, {
+        status: 204,
+        headers: corsHeaders
+      });
+    }
+
+    try {
+      
+      if (env.DB && url.pathname === '/webhook') {
+        ctx.waitUntil(initializeDatabaseTables(env.DB));
+      }
+
+      if (url.pathname === '/health') {
+        return new Response(JSON.stringify({
+          status: 'healthy',
+          timestamp: new Date().toISOString(),
+          worker: 'telegram-verification-bot',
+          version: '1.0.0'
+        }), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            ...corsHeaders
+          }
+        });
+      }
+
+      if (url.pathname === '/webhook' && request.method === 'POST') {
+        try {
+          const update = await request.json();
+          ctx.waitUntil(handleTelegramUpdate(update, env));
+          
+          return new Response('OK', { 
+            status: 200,
+            headers: corsHeaders
+          });
+        } catch (error) {
+          console.error('Webhook processing error:', error);
+          return new Response('Error processing update', { 
+            status: 500,
+            headers: corsHeaders
+          });
+        }
+      }
+
+      if (url.pathname === '/setup') {
+        const webhookUrl = `${url.origin}/webhook`;
+        const botToken = env.TELEGRAM_BOT_TOKEN;
+
+        if (!botToken) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'TELEGRAM_BOT_TOKEN not configured'
+          }), {
+            status: 500,
+            headers: {
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          });
+        }
+
+        const telegramUrl = `https://api.telegram.org/bot${botToken}/setWebhook`;
+        
+        try {
+          const response = await fetch(telegramUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: webhookUrl,
+              allowed_updates: ['message', 'chat_member', 'callback_query'],
+              drop_pending_updates: false
+            })
+          });
+
+          const result = await response.json();
+          
+          return new Response(JSON.stringify({
+            success: result.ok,
+            webhook_url: webhookUrl,
+            telegram_response: result
+          }, null, 2), {
+            status: result.ok ? 200 : 500,
+            headers: {
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          });
+        } catch (error) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: error.message
+          }), {
+            status: 500,
+            headers: {
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          });
+        }
+      }
+
+      if (url.pathname === '/webhook-info') {
+        const botToken = env.TELEGRAM_BOT_TOKEN;
+        
+        if (!botToken) {
+          return new Response(JSON.stringify({
+            error: 'TELEGRAM_BOT_TOKEN not configured'
+          }), {
+            status: 500,
+            headers: {
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          });
+        }
+
+        const telegramUrl = `https://api.telegram.org/bot${botToken}/getWebhookInfo`;
+        
+        try {
+          const response = await fetch(telegramUrl);
+          const result = await response.json();
+          
+          return new Response(JSON.stringify(result, null, 2), {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          });
+        } catch (error) {
+          return new Response(JSON.stringify({
+            error: error.message
+          }), {
+            status: 500,
+            headers: {
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          });
+        }
+      }
+
+      if (url.pathname === '/delete-webhook') {
+        const botToken = env.TELEGRAM_BOT_TOKEN;
+        
+        if (!botToken) {
+          return new Response(JSON.stringify({
+            error: 'TELEGRAM_BOT_TOKEN not configured'
+          }), {
+            status: 500,
+            headers: {
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          });
+        }
+
+        const telegramUrl = `https://api.telegram.org/bot${botToken}/deleteWebhook`;
+        
+        try {
+          const response = await fetch(telegramUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ drop_pending_updates: true })
+          });
+          
+          const result = await response.json();
+          
+          return new Response(JSON.stringify(result, null, 2), {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          });
+        } catch (error) {
+          return new Response(JSON.stringify({
+            error: error.message
+          }), {
+            status: 500,
+            headers: {
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          });
+        }
+      }
+
+      if (url.pathname === '/') {
+        return new Response(JSON.stringify({
+          service: 'Telegram Verification Bot',
+          version: '1.0.0',
+          endpoints: {
+            '/': 'API information',
+            '/health': 'Health check',
+            '/webhook': 'Telegram webhook (POST only)',
+            '/setup': 'Setup webhook',
+            '/webhook-info': 'Get webhook information',
+            '/delete-webhook': 'Delete webhook'
+          },
+          status: 'running',
+          timestamp: new Date().toISOString()
+        }, null, 2), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            ...corsHeaders
+          }
+        });
+      }
+
+      return new Response(JSON.stringify({
+        error: 'Not Found',
+        path: url.pathname
+      }), {
+        status: 404,
         headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type'
+          'Content-Type': 'application/json',
+          ...corsHeaders
+        }
+      });
+
+    } catch (error) {
+      console.error('Worker error:', error);
+      return new Response(JSON.stringify({
+        error: 'Internal Server Error',
+        message: error.message
+      }), {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders
         }
       });
     }
-    
-    // 健康检查
-    if (url.pathname === '/' || url.pathname === '/health') {
-      return new Response('Telegram Forwarding Bot is running!', {
-        status: 200,
-        headers: { 'Content-Type': 'text/plain' }
-      });
-    }
-    
-    // Webhook 端点
-    if (url.pathname === '/webhook' && request.method === 'POST') {
-      try {
-        const update = await request.json();
-        await handleUpdate(update, env);
-        return new Response('OK', { status: 200 });
-      } catch (error) {
-        console.error('Webhook error:', error);
-        return new Response('Error', { status: 500 });
-      }
-    }
-    
-    // 设置 webhook
-    if (url.pathname === '/setup') {
-      const webhookUrl = `${url.origin}/webhook`;
-      const bot = new TelegramAPI(env.TELEGRAM_BOT_TOKEN);
-      const result = await bot.callAPI('setWebhook', {
-        url: webhookUrl,
-        allowed_updates: ['message', 'callback_query']
-      });
-      
-      return new Response(JSON.stringify(result, null, 2), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    // Webhook 信息
-    if (url.pathname === '/webhook-info') {
-      const bot = new TelegramAPI(env.TELEGRAM_BOT_TOKEN);
-      const result = await bot.callAPI('getWebhookInfo');
-      
-      return new Response(JSON.stringify(result, null, 2), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    // 删除 webhook
-    if (url.pathname === '/delete-webhook') {
-      const bot = new TelegramAPI(env.TELEGRAM_BOT_TOKEN);
-      const result = await bot.callAPI('deleteWebhook');
-      
-      return new Response(JSON.stringify(result, null, 2), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    return new Response('Not Found', { status: 404 });
   }
 };
