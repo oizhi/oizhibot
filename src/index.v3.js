@@ -138,83 +138,87 @@ class Database {
 
   async initTables() {
     try {
-      // 用户状态表
-      await this.db.prepare(`
-        CREATE TABLE IF NOT EXISTS user_states (
-          user_id INTEGER PRIMARY KEY,
-          mode TEXT DEFAULT 'idle',
-          current_repo TEXT,
-          setup_step TEXT,
-          setup_data TEXT,
-          message_count INTEGER DEFAULT 0,
-          updated_at INTEGER NOT NULL,
-          created_at INTEGER NOT NULL
-        )
-      `).run();
+      const statements = [
+        // 用户状态表
+        this.db.prepare(`
+          CREATE TABLE IF NOT EXISTS user_states (
+            user_id INTEGER PRIMARY KEY,
+            mode TEXT DEFAULT 'idle',
+            current_repo TEXT,
+            setup_step TEXT,
+            setup_data TEXT,
+            message_count INTEGER DEFAULT 0,
+            updated_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+          )
+        `),
 
-      // 视频库表
-      await this.db.prepare(`
-        CREATE TABLE IF NOT EXISTS forward_repositories (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL UNIQUE,
-          description TEXT,
-          created_by INTEGER NOT NULL,
-          backup_channel_id INTEGER,           -- 新增：备份频道 ID
-          backup_enabled INTEGER DEFAULT 1,    -- 新增：备份功能开关
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER
-        )
-      `).run();
+        // 视频库表
+        this.db.prepare(`
+          CREATE TABLE IF NOT EXISTS forward_repositories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            created_by INTEGER NOT NULL,
+            backup_channel_id INTEGER,
+            backup_enabled INTEGER DEFAULT 1,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER
+          )
+        `),
 
-      // 转发目标表
-      await this.db.prepare(`
-        CREATE TABLE IF NOT EXISTS forward_targets (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          repo_id INTEGER NOT NULL,
-          target_chat_id INTEGER NOT NULL,
-          target_type TEXT CHECK(target_type IN ('channel', 'group', 'private')),
-          target_title TEXT,
-          enabled INTEGER DEFAULT 1,
-          created_at INTEGER NOT NULL,
-          UNIQUE(repo_id, target_chat_id),
-          FOREIGN KEY (repo_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
-        )
-      `).run();
+        // 转发目标表
+        this.db.prepare(`
+          CREATE TABLE IF NOT EXISTS forward_targets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER NOT NULL,
+            target_chat_id INTEGER NOT NULL,
+            target_type TEXT CHECK(target_type IN ('channel', 'group', 'private')),
+            target_title TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at INTEGER NOT NULL,
+            UNIQUE(repo_id, target_chat_id),
+            FOREIGN KEY (repo_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
+          )
+        `),
 
-      // 权限表
-      await this.db.prepare(`
-        CREATE TABLE IF NOT EXISTS forward_permissions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          repo_id INTEGER NOT NULL,
-          user_id INTEGER NOT NULL,
-          role TEXT CHECK(role IN ('admin', 'contributor', 'viewer')) DEFAULT 'contributor',
-          granted_by INTEGER NOT NULL,
-          granted_at INTEGER NOT NULL,
-          UNIQUE(repo_id, user_id),
-          FOREIGN KEY (repo_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
-        )
-      `).run();
+        // 权限表
+        this.db.prepare(`
+          CREATE TABLE IF NOT EXISTS forward_permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role TEXT CHECK(role IN ('admin', 'contributor', 'viewer')) DEFAULT 'contributor',
+            granted_by INTEGER NOT NULL,
+            granted_at INTEGER NOT NULL,
+            UNIQUE(repo_id, user_id),
+            FOREIGN KEY (repo_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
+          )
+        `),
 
-      // 转发消息记录表（增强版，记录 file_id）
-      await this.db.prepare(`
-        CREATE TABLE IF NOT EXISTS forwarded_messages (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          repo_id INTEGER NOT NULL,
-          source_user_id INTEGER NOT NULL,
-          source_message_id INTEGER,
-          message_type TEXT,
-          media_file_id TEXT,                  -- 新增：Telegram file_id
-          media_file_unique_id TEXT,           -- 新增：Telegram file_unique_id
-          media_mime_type TEXT,                -- 新增：MIME 类型
-          media_file_size INTEGER,             -- 新增：文件大小
-          caption TEXT,                        -- 新增：媒体标题
-          forwarded_to TEXT,                   -- JSON 数组
-          backup_message_id INTEGER,           -- 新增：备份频道中的消息 ID
-          forwarded_at INTEGER NOT NULL,
-          metadata TEXT,
-          FOREIGN KEY (repo_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
-        )
-      `).run();
+        // 转发消息记录表
+        this.db.prepare(`
+          CREATE TABLE IF NOT EXISTS forwarded_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER NOT NULL,
+            source_user_id INTEGER NOT NULL,
+            source_message_id INTEGER,
+            message_type TEXT,
+            media_file_id TEXT,
+            media_file_unique_id TEXT,
+            media_mime_type TEXT,
+            media_file_size INTEGER,
+            caption TEXT,
+            forwarded_to TEXT,
+            backup_message_id INTEGER,
+            forwarded_at INTEGER NOT NULL,
+            metadata TEXT,
+            FOREIGN KEY (repo_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
+          )
+        `)
+      ];
+      
+      await this.db.batch(statements);
 
       // 待绑定群组表
       await this.db.prepare(`
@@ -756,59 +760,28 @@ export default {
     // Webhook endpoint
     if (url.pathname === '/webhook' && request.method === 'POST') {
       try {
-        console.log('[DEBUG] 1. Webhook received');
         const update = await request.json();
-        console.log('[DEBUG] 2. Update parsed:', update.update_id);
         
-        console.log('[DEBUG] 3. Creating TelegramAPI...');
         const bot = new TelegramAPI(env.TELEGRAM_BOT_TOKEN);
-        console.log('[DEBUG] 4. Creating Database...');
         const db = new Database(env.DB);
-        console.log('[DEBUG] 5. Creating ForwardingHandler...');
         const handler = new ForwardingHandler(bot, db);
-        console.log('[DEBUG] 6. All instances created');
         
         // 初始化数据库
-        console.log('[DEBUG] 7. Initializing tables...');
         await db.initTables();
-        console.log('[DEBUG] 8. Tables initialized');
         
         // 获取 Bot 信息
-        console.log('[DEBUG] 9. Getting bot info...');
         await bot.getMe();
-        console.log('[DEBUG] 10. Bot info retrieved');
         
         // 清理过期的待绑定记录
-        console.log('[DEBUG] 11. Cleaning up bindings...');
         await db.cleanupExpiredBindings();
-        console.log('[DEBUG] 12. Cleanup done');
         
         // 处理更新
-        console.log('[DEBUG] 13. Handling update...');
         await handleUpdate(update, bot, db, handler);
-        console.log('[DEBUG] 14. Update handled');
         
         return new Response('OK', { status: 200 });
       } catch (error) {
-        console.error('[DEBUG] ERROR caught:', error);
-        // 返回详细错误信息（仅用于调试）
-        const errorDetails = {
-          error: error.message,
-          stack: error.stack.substring(0, 500),
-          name: error.name
-        };
-        // 发送错误到 Telegram（调试用）
-        try {
-          const bot = new TelegramAPI(env.TELEGRAM_BOT_TOKEN);
-          const logMsg = `❌ Bot Error:\n\nError: ${errorDetails.error}\n\nName: ${errorDetails.name}\n\nStack:\n${errorDetails.stack}`;
-          await bot.sendMessage(6938405510, logMsg);
-        } catch (e) {
-          console.error('[DEBUG] Failed to send error message:', e);
-        }
-        return new Response(JSON.stringify(errorDetails), { 
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        console.error('Webhook error:', error);
+        return new Response('Error', { status: 500 });
       }
     }
 
