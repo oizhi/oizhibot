@@ -83,6 +83,14 @@ class TelegramBot {
     });
   }
 
+  async forwardMessage(chatId, fromChatId, messageId) {
+    return this.apiCall('forwardMessage', {
+      chat_id: chatId,
+      from_chat_id: fromChatId,
+      message_id: messageId
+    });
+  }
+
   async apiCall(method, params) {
     const response = await fetch(`${this.apiUrl}/${method}`, {
       method: 'POST',
@@ -553,6 +561,365 @@ async function logBotDetection(db, data) {
     .run();
 }
 
+// ==================== Forwarding System Database ====================
+
+// 存储库管理
+async function createForwardRepository(db, data) {
+  const { name, description, created_by } = data;
+  const now = Date.now();
+
+  try {
+    await db
+      .prepare(
+        `INSERT INTO forward_repositories (name, description, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .bind(name, description, created_by, now, now)
+      .run();
+    return { success: true };
+  } catch (error) {
+    if (error.message && error.message.includes('UNIQUE')) {
+      return { success: false, error: 'repository_exists' };
+    }
+    console.error('createForwardRepository error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function getForwardRepository(db, name) {
+  try {
+    return await db
+      .prepare('SELECT * FROM forward_repositories WHERE name = ?')
+      .bind(name)
+      .first();
+  } catch (error) {
+    console.error('getForwardRepository error:', error);
+    return null;
+  }
+}
+
+async function listForwardRepositories(db, userId = null) {
+  try {
+    if (userId) {
+      // 返回用户有权限的存储库
+      const result = await db
+        .prepare(`
+          SELECT DISTINCT r.* FROM forward_repositories r
+          LEFT JOIN forward_permissions p ON r.id = p.repository_id
+          WHERE r.created_by = ? OR p.user_id = ?
+          ORDER BY r.created_at DESC
+        `)
+        .bind(userId, userId)
+        .all();
+      return result.results || [];
+    }
+    
+    // 返回所有存储库
+    const result = await db
+      .prepare('SELECT * FROM forward_repositories ORDER BY created_at DESC')
+      .all();
+    return result.results || [];
+  } catch (error) {
+    console.error('listForwardRepositories error:', error);
+    return [];
+  }
+}
+
+async function deleteForwardRepository(db, name) {
+  try {
+    await db
+      .prepare('DELETE FROM forward_repositories WHERE name = ?')
+      .bind(name)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('deleteForwardRepository error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function updateForwardRepository(db, name, data) {
+  try {
+    const { description } = data;
+    await db
+      .prepare(`
+        UPDATE forward_repositories 
+        SET description = ?, updated_at = ?
+        WHERE name = ?
+      `)
+      .bind(description, Date.now(), name)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('updateForwardRepository error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// 转发目标管理
+async function addForwardTarget(db, repoId, targetChatId, targetType) {
+  try {
+    const now = Date.now();
+    await db
+      .prepare(`
+        INSERT INTO forward_targets (repository_id, target_chat_id, target_type, enabled, created_at)
+        VALUES (?, ?, ?, 1, ?)
+      `)
+      .bind(repoId, targetChatId, targetType, now)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('addForwardTarget error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function removeForwardTarget(db, repoId, targetChatId) {
+  try {
+    await db
+      .prepare('DELETE FROM forward_targets WHERE repository_id = ? AND target_chat_id = ?')
+      .bind(repoId, targetChatId)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('removeForwardTarget error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function listForwardTargets(db, repoId) {
+  try {
+    const result = await db
+      .prepare('SELECT * FROM forward_targets WHERE repository_id = ? ORDER BY created_at')
+      .bind(repoId)
+      .all();
+    return result.results || [];
+  } catch (error) {
+    console.error('listForwardTargets error:', error);
+    return [];
+  }
+}
+
+async function toggleForwardTarget(db, repoId, targetChatId) {
+  try {
+    await db
+      .prepare(`
+        UPDATE forward_targets 
+        SET enabled = 1 - enabled 
+        WHERE repository_id = ? AND target_chat_id = ?
+      `)
+      .bind(repoId, targetChatId)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('toggleForwardTarget error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// 权限管理
+async function grantForwardPermission(db, repoId, userId, role, grantedBy) {
+  try {
+    const now = Date.now();
+    
+    // SQLite doesn't support INSERT ... ON CONFLICT ... DO UPDATE in D1 yet
+    // So we delete first, then insert
+    await db
+      .prepare('DELETE FROM forward_permissions WHERE repository_id = ? AND user_id = ?')
+      .bind(repoId, userId)
+      .run();
+    
+    await db
+      .prepare(`
+        INSERT INTO forward_permissions (repository_id, user_id, role, granted_by, granted_at)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      .bind(repoId, userId, role, grantedBy, now)
+      .run();
+    
+    return { success: true };
+  } catch (error) {
+    console.error('grantForwardPermission error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function revokeForwardPermission(db, repoId, userId) {
+  try {
+    await db
+      .prepare('DELETE FROM forward_permissions WHERE repository_id = ? AND user_id = ?')
+      .bind(repoId, userId)
+      .run();
+    return { success: true };
+  } catch (error) {
+    console.error('revokeForwardPermission error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function checkForwardPermission(db, repoId, userId, requiredRole = 'contributor') {
+  try {
+    const result = await db
+      .prepare(`
+        SELECT r.created_by, p.role 
+        FROM forward_repositories r
+        LEFT JOIN forward_permissions p ON r.id = p.repository_id AND p.user_id = ?
+        WHERE r.id = ?
+      `)
+      .bind(userId, repoId)
+      .first();
+
+    if (!result) return false;
+    
+    // 创建者默认是 admin
+    if (result.created_by === userId) return true;
+    
+    // 检查权限等级
+    const roleLevel = { viewer: 1, contributor: 2, admin: 3 };
+    const userLevel = roleLevel[result.role] || 0;
+    const requiredLevel = roleLevel[requiredRole] || 0;
+    
+    return userLevel >= requiredLevel;
+  } catch (error) {
+    console.error('checkForwardPermission error:', error);
+    return false;
+  }
+}
+
+async function listForwardPermissions(db, repoId) {
+  try {
+    const result = await db
+      .prepare('SELECT * FROM forward_permissions WHERE repository_id = ? ORDER BY granted_at')
+      .bind(repoId)
+      .all();
+    return result.results || [];
+  } catch (error) {
+    console.error('listForwardPermissions error:', error);
+    return [];
+  }
+}
+
+// 消息记录
+async function logForwardedMessage(db, data) {
+  try {
+    const { repository_id, source_user_id, source_message_id, message_type, forwarded_to, metadata } = data;
+    const now = Date.now();
+    
+    await db
+      .prepare(`
+        INSERT INTO forwarded_messages 
+        (repository_id, source_user_id, source_message_id, message_type, forwarded_to, forwarded_at, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      .bind(
+        repository_id,
+        source_user_id,
+        source_message_id,
+        message_type,
+        JSON.stringify(forwarded_to),
+        now,
+        JSON.stringify(metadata || {})
+      )
+      .run();
+  } catch (error) {
+    console.error('logForwardedMessage error:', error);
+  }
+}
+
+async function getForwardedStats(db, repoId, period = 'all') {
+  try {
+    let dateFilter = '';
+    const now = Date.now();
+    
+    if (period === 'today') {
+      const todayStart = new Date().setHours(0, 0, 0, 0);
+      dateFilter = `AND forwarded_at >= ${todayStart}`;
+    } else if (period === 'week') {
+      const weekStart = now - 7 * 24 * 60 * 60 * 1000;
+      dateFilter = `AND forwarded_at >= ${weekStart}`;
+    }
+
+    const total = await db
+      .prepare(`SELECT COUNT(*) as count FROM forwarded_messages WHERE repository_id = ? ${dateFilter}`)
+      .bind(repoId)
+      .first();
+
+    const byType = await db
+      .prepare(`
+        SELECT message_type, COUNT(*) as count 
+        FROM forwarded_messages 
+        WHERE repository_id = ? ${dateFilter}
+        GROUP BY message_type
+      `)
+      .bind(repoId)
+      .all();
+
+    const byUser = await db
+      .prepare(`
+        SELECT source_user_id, COUNT(*) as count 
+        FROM forwarded_messages 
+        WHERE repository_id = ? ${dateFilter}
+        GROUP BY source_user_id
+        ORDER BY count DESC
+        LIMIT 10
+      `)
+      .bind(repoId)
+      .all();
+
+    return {
+      total: total?.count || 0,
+      byType: byType.results || [],
+      byUser: byUser.results || []
+    };
+  } catch (error) {
+    console.error('getForwardedStats error:', error);
+    return { total: 0, byType: [], byUser: [] };
+  }
+}
+
+async function getRecentForwarded(db, repoId, limit = 10) {
+  try {
+    const result = await db
+      .prepare(`
+        SELECT * FROM forwarded_messages 
+        WHERE repository_id = ? 
+        ORDER BY forwarded_at DESC 
+        LIMIT ?
+      `)
+      .bind(repoId, limit)
+      .all();
+    
+    return result.results || [];
+  } catch (error) {
+    console.error('getRecentForwarded error:', error);
+    return [];
+  }
+}
+
+// Helper functions
+function getMessageType(message) {
+  if (message.photo) return 'photo';
+  if (message.video) return 'video';
+  if (message.document) return 'document';
+  if (message.audio) return 'audio';
+  if (message.voice) return 'voice';
+  if (message.sticker) return 'sticker';
+  if (message.animation) return 'animation';
+  if (message.poll) return 'poll';
+  return 'text';
+}
+
+function getTimeAgo(timestamp) {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return `${seconds}秒前`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}小时前`;
+  const days = Math.floor(hours / 24);
+  return `${days}天前`;
+}
+
 // ==================== Main Handler ====================
 async function handleTelegramUpdate(update, env) {
   const bot = new TelegramBot(env.TELEGRAM_BOT_TOKEN);
@@ -991,6 +1358,560 @@ ${detectionDetails}
     return;
   }
 
+  // ==================== 转发系统命令 ====================
+  
+  // /repo_create
+  if (text.startsWith('/repo_create')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 2) {
+      await bot.sendMessage(chatId, '用法: /repo_create <名称> <描述>');
+      return;
+    }
+    
+    const name = args[0];
+    const description = args.slice(1).join(' ');
+    
+    const result = await createForwardRepository(db, { name, description, created_by: userId });
+    
+    if (result.success) {
+      await bot.sendMessage(
+        chatId,
+        `✅ 存储库创建成功！
+
+📦 名称: ${name}
+📝 描述: ${description}
+
+💡 下一步:
+1. 添加转发目标: /target_add ${name} <chat_id>
+2. 授权用户: /perm_grant ${name} <user_id> <role>
+3. 开始转发: /use ${name}`
+      );
+    } else if (result.error === 'repository_exists') {
+      await bot.sendMessage(chatId, `❌ 存储库 "${name}" 已存在`);
+    } else {
+      await bot.sendMessage(chatId, `❌ 创建失败: ${result.error}`);
+    }
+    return;
+  }
+
+  // /repo_list
+  if (text === '/repo_list') {
+    const repos = await listForwardRepositories(db, userId);
+    
+    if (repos.length === 0) {
+      await bot.sendMessage(chatId, '📦 暂无存储库\n\n使用 /repo_create <名称> <描述> 创建第一个');
+      return;
+    }
+    
+    let msg = '📦 <b>存储库列表</b>\n\n';
+    for (const repo of repos) {
+      const targets = await listForwardTargets(db, repo.id);
+      const enabledTargets = targets.filter(t => t.enabled);
+      msg += `📌 <b>${repo.name}</b>\n`;
+      msg += `   📝 ${repo.description || '无描述'}\n`;
+      msg += `   🎯 转发目标: ${enabledTargets.length}/${targets.length} 个启用\n`;
+      msg += `   👤 创建者: ${repo.created_by}\n\n`;
+    }
+    msg += '\n💡 查看详情: /repo_info <名称>';
+    
+    await bot.sendMessage(chatId, msg);
+    return;
+  }
+
+  // /repo_delete
+  if (text.startsWith('/repo_delete')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /repo_delete <名称>');
+      return;
+    }
+    
+    const name = args[0];
+    const repo = await getForwardRepository(db, name);
+    
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${name}" 不存在`);
+      return;
+    }
+    
+    if (repo.created_by !== userId) {
+      await bot.sendMessage(chatId, '❌ 只有创建者可以删除存储库');
+      return;
+    }
+    
+    await deleteForwardRepository(db, name);
+    await bot.sendMessage(chatId, `✅ 存储库 "${name}" 已删除`);
+    return;
+  }
+
+  // /repo_info
+  if (text.startsWith('/repo_info')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /repo_info <名称>');
+      return;
+    }
+    
+    const name = args[0];
+    const repo = await getForwardRepository(db, name);
+    
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${name}" 不存在`);
+      return;
+    }
+    
+    const targets = await listForwardTargets(db, repo.id);
+    const permissions = await listForwardPermissions(db, repo.id);
+    const stats = await getForwardedStats(db, repo.id);
+    
+    let msg = `📦 <b>存储库: ${repo.name}</b>\n\n`;
+    msg += `📝 描述: ${repo.description || '无'}\n`;
+    msg += `👤 创建者: ${repo.created_by}\n`;
+    msg += `📅 创建: ${new Date(repo.created_at).toLocaleString('zh-CN')}\n\n`;
+    
+    msg += `🎯 <b>转发目标 (${targets.length})</b>\n`;
+    if (targets.length > 0) {
+      for (const target of targets) {
+        const status = target.enabled ? '✅' : '❌';
+        msg += `${status} ${target.target_chat_id} (${target.target_type})\n`;
+      }
+    } else {
+      msg += '   暂无目标\n';
+    }
+    
+    msg += `\n👥 <b>授权用户 (${permissions.length})</b>\n`;
+    if (permissions.length > 0) {
+      for (const perm of permissions) {
+        msg += `   • ${perm.user_id} (${perm.role})\n`;
+      }
+    } else {
+      msg += '   暂无授权用户\n';
+    }
+    
+    msg += `\n📊 <b>统计</b>\n`;
+    msg += `   总转发: ${stats.total} 条\n`;
+    
+    await bot.sendMessage(chatId, msg);
+    return;
+  }
+
+  // /target_add
+  if (text.startsWith('/target_add')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 2) {
+      await bot.sendMessage(chatId, '用法: /target_add <存储库> <目标chat_id>');
+      return;
+    }
+    
+    const repoName = args[0];
+    const targetChatId = parseInt(args[1]);
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'admin');
+    if (!hasPermission) {
+      await bot.sendMessage(chatId, '❌ 只有管理员可以添加转发目标');
+      return;
+    }
+    
+    // 检测目标类型
+    let targetType = 'group';
+    if (targetChatId > 0) {
+      targetType = 'private';
+    } else if (String(targetChatId).startsWith('-100')) {
+      targetType = 'channel';
+    }
+    
+    // 尝试发送测试消息到目标
+    try {
+      await bot.sendMessage(
+        targetChatId,
+        `✅ 转发目标已添加！\n\n📦 存储库: ${repoName}\n\n现在此${targetType === 'channel' ? '频道' : '群组'}会收到转发到该存储库的内容。`
+      );
+    } catch (error) {
+      await bot.sendMessage(
+        chatId,
+        `❌ 无法发送消息到目标 ${targetChatId}\n\n请确保:\n1. Bot 已加入目标群组/频道\n2. Bot 有发送消息权限\n3. Chat ID 正确\n\n错误: ${error.message}`
+      );
+      return;
+    }
+    
+    await addForwardTarget(db, repo.id, targetChatId, targetType);
+    
+    await bot.sendMessage(
+      chatId,
+      `✅ 转发目标已添加！\n\n📦 存储库: ${repoName}\n🎯 目标: ${targetChatId} (${targetType})`
+    );
+    return;
+  }
+
+  // /target_remove
+  if (text.startsWith('/target_remove')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 2) {
+      await bot.sendMessage(chatId, '用法: /target_remove <存储库> <目标chat_id>');
+      return;
+    }
+    
+    const repoName = args[0];
+    const targetChatId = parseInt(args[1]);
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'admin');
+    if (!hasPermission) {
+      await bot.sendMessage(chatId, '❌ 只有管理员可以移除转发目标');
+      return;
+    }
+    
+    await removeForwardTarget(db, repo.id, targetChatId);
+    await bot.sendMessage(chatId, `✅ 转发目标 ${targetChatId} 已移除`);
+    return;
+  }
+
+  // /target_list
+  if (text.startsWith('/target_list')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /target_list <存储库>');
+      return;
+    }
+    
+    const repoName = args[0];
+    const repo = await getForwardRepository(db, repoName);
+    
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const targets = await listForwardTargets(db, repo.id);
+    
+    if (targets.length === 0) {
+      await bot.sendMessage(chatId, `📦 存储库 "${repoName}" 暂无转发目标`);
+      return;
+    }
+    
+    let msg = `🎯 <b>存储库 "${repoName}" 的转发目标</b>\n\n`;
+    for (const target of targets) {
+      const status = target.enabled ? '✅ 启用' : '❌ 禁用';
+      msg += `${status}\n`;
+      msg += `   ID: ${target.target_chat_id}\n`;
+      msg += `   类型: ${target.target_type}\n`;
+      msg += `   创建: ${new Date(target.created_at).toLocaleString('zh-CN')}\n\n`;
+    }
+    
+    await bot.sendMessage(chatId, msg);
+    return;
+  }
+
+  // /target_toggle
+  if (text.startsWith('/target_toggle')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 2) {
+      await bot.sendMessage(chatId, '用法: /target_toggle <存储库> <目标chat_id>');
+      return;
+    }
+    
+    const repoName = args[0];
+    const targetChatId = parseInt(args[1]);
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'admin');
+    if (!hasPermission) {
+      await bot.sendMessage(chatId, '❌ 只有管理员可以切换目标状态');
+      return;
+    }
+    
+    await toggleForwardTarget(db, repo.id, targetChatId);
+    await bot.sendMessage(chatId, `✅ 转发目标 ${targetChatId} 状态已切换`);
+    return;
+  }
+
+  // /perm_grant
+  if (text.startsWith('/perm_grant')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 3) {
+      await bot.sendMessage(chatId, '用法: /perm_grant <存储库> <user_id> <role>\n角色: admin, contributor, viewer');
+      return;
+    }
+    
+    const repoName = args[0];
+    const targetUserId = parseInt(args[1]);
+    const role = args[2];
+    
+    if (!['admin', 'contributor', 'viewer'].includes(role)) {
+      await bot.sendMessage(chatId, '❌ 角色必须是: admin, contributor, viewer');
+      return;
+    }
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'admin');
+    if (!hasPermission) {
+      await bot.sendMessage(chatId, '❌ 只有管理员可以授予权限');
+      return;
+    }
+    
+    await grantForwardPermission(db, repo.id, targetUserId, role, userId);
+    await bot.sendMessage(chatId, `✅ 已授予用户 ${targetUserId} "${role}" 权限`);
+    return;
+  }
+
+  // /perm_revoke
+  if (text.startsWith('/perm_revoke')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 2) {
+      await bot.sendMessage(chatId, '用法: /perm_revoke <存储库> <user_id>');
+      return;
+    }
+    
+    const repoName = args[0];
+    const targetUserId = parseInt(args[1]);
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'admin');
+    if (!hasPermission) {
+      await bot.sendMessage(chatId, '❌ 只有管理员可以撤销权限');
+      return;
+    }
+    
+    await revokeForwardPermission(db, repo.id, targetUserId);
+    await bot.sendMessage(chatId, `✅ 已撤销用户 ${targetUserId} 的权限`);
+    return;
+  }
+
+  // /perm_list
+  if (text.startsWith('/perm_list')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /perm_list <存储库>');
+      return;
+    }
+    
+    const repoName = args[0];
+    const repo = await getForwardRepository(db, repoName);
+    
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const permissions = await listForwardPermissions(db, repo.id);
+    
+    let msg = `👥 <b>存储库 "${repoName}" 的授权用户</b>\n\n`;
+    msg += `👤 创建者: ${repo.created_by} (admin)\n\n`;
+    
+    if (permissions.length > 0) {
+      for (const perm of permissions) {
+        msg += `• ${perm.user_id} - ${perm.role}\n`;
+        msg += `  授予者: ${perm.granted_by}\n`;
+        msg += `  时间: ${new Date(perm.granted_at).toLocaleString('zh-CN')}\n\n`;
+      }
+    } else {
+      msg += '暂无其他授权用户\n';
+    }
+    
+    await bot.sendMessage(chatId, msg);
+    return;
+  }
+
+  // /use
+  if (text.startsWith('/use')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /use <存储库名称> 或 /use off');
+      return;
+    }
+    
+    const repoName = args[0];
+    
+    if (repoName === 'off') {
+      userCurrentRepo.delete(userId);
+      await bot.sendMessage(chatId, '✅ 已关闭自动转发');
+      return;
+    }
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const hasPermission = await checkForwardPermission(db, repo.id, userId, 'contributor');
+    if (!hasPermission) {
+      await bot.sendMessage(chatId, '❌ 你没有向此存储库发送内容的权限');
+      return;
+    }
+    
+    userCurrentRepo.set(userId, repoName);
+    
+    const targets = await listForwardTargets(db, repo.id);
+    const enabledTargets = targets.filter(t => t.enabled);
+    
+    await bot.sendMessage(
+      chatId,
+      `✅ <b>当前存储库: ${repoName}</b>\n\n现在发送的所有消息都会转发到此存储库的 ${enabledTargets.length} 个目标\n\n发送 /use off 关闭自动转发`
+    );
+    return;
+  }
+
+  // /forwarded_stats
+  if (text.startsWith('/forwarded_stats')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /forwarded_stats <存储库> [period]\nperiod: today, week, all');
+      return;
+    }
+    
+    const repoName = args[0];
+    const period = args[1] || 'all';
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const stats = await getForwardedStats(db, repo.id, period);
+    
+    let msg = `📊 <b>${repoName} 转发统计</b>\n\n`;
+    msg += `📅 周期: ${period === 'today' ? '今天' : period === 'week' ? '本周' : '总计'}\n`;
+    msg += `📝 总计: ${stats.total} 条\n\n`;
+    
+    if (stats.byType.length > 0) {
+      msg += `📝 <b>内容类型</b>\n`;
+      for (const type of stats.byType) {
+        const percentage = ((type.count / stats.total) * 100).toFixed(1);
+        msg += `   ${type.message_type}: ${type.count} 条 (${percentage}%)\n`;
+      }
+      msg += '\n';
+    }
+    
+    if (stats.byUser.length > 0) {
+      msg += `👥 <b>贡献者排名</b>\n`;
+      for (let i = 0; i < Math.min(5, stats.byUser.length); i++) {
+        const userStat = stats.byUser[i];
+        msg += `   ${i + 1}. ${userStat.source_user_id}: ${userStat.count} 条\n`;
+      }
+    }
+    
+    await bot.sendMessage(chatId, msg);
+    return;
+  }
+
+  // /forwarded_recent
+  if (text.startsWith('/forwarded_recent')) {
+    const args = text.split(' ').slice(1);
+    if (args.length < 1) {
+      await bot.sendMessage(chatId, '用法: /forwarded_recent <存储库> [limit]');
+      return;
+    }
+    
+    const repoName = args[0];
+    const limit = parseInt(args[1]) || 10;
+    
+    const repo = await getForwardRepository(db, repoName);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${repoName}" 不存在`);
+      return;
+    }
+    
+    const recent = await getRecentForwarded(db, repo.id, limit);
+    
+    if (recent.length === 0) {
+      await bot.sendMessage(chatId, `📜 存储库 "${repoName}" 暂无转发记录`);
+      return;
+    }
+    
+    let msg = `📜 <b>${repoName} 最近转发 (${recent.length}条)</b>\n\n`;
+    
+    for (let i = 0; i < recent.length; i++) {
+      const record = recent[i];
+      const timeAgo = getTimeAgo(record.forwarded_at);
+      msg += `${i + 1}. ${timeAgo}\n`;
+      msg += `   用户: ${record.source_user_id}\n`;
+      msg += `   类型: ${record.message_type}\n\n`;
+    }
+    
+    await bot.sendMessage(chatId, msg);
+    return;
+  }
+
+  // 检查是否有当前存储库（自动转发）
+  const currentRepo = userCurrentRepo.get(userId);
+  if (currentRepo && !text.startsWith('/')) {
+    // 转发消息到存储库
+    const repo = await getForwardRepository(db, currentRepo);
+    if (!repo) {
+      await bot.sendMessage(chatId, `❌ 存储库 "${currentRepo}" 不存在`);
+      userCurrentRepo.delete(userId);
+      return;
+    }
+
+    const targets = await listForwardTargets(db, repo.id);
+    const enabledTargets = targets.filter(t => t.enabled);
+    
+    if (enabledTargets.length === 0) {
+      await bot.sendMessage(chatId, '❌ 此存储库没有启用的转发目标');
+      return;
+    }
+
+    // 并发转发到所有目标
+    const results = await Promise.allSettled(
+      enabledTargets.map(target => 
+        bot.forwardMessage(target.target_chat_id, chatId, message.message_id)
+      )
+    );
+
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.filter(r => r.status === 'rejected').length;
+
+    // 记录转发日志
+    await logForwardedMessage(db, {
+      repository_id: repo.id,
+      source_user_id: userId,
+      source_message_id: message.message_id,
+      message_type: getMessageType(message),
+      forwarded_to: enabledTargets.map(t => t.target_chat_id),
+      metadata: { successful, failed }
+    });
+
+    // 发送确认消息
+    let confirmMsg = `✅ 已转发到 ${currentRepo}\n\n`;
+    confirmMsg += `成功: ${successful} 个目标\n`;
+    if (failed > 0) {
+      confirmMsg += `失败: ${failed} 个目标\n`;
+    }
+
+    await bot.sendMessage(chatId, confirmMsg);
+    return;
+  }
+
+  // ==================== 原有的私聊消息处理 ====================
+
   // 处理转发的消息 - 检测其他用户
   if (message.forward_from) {
     const targetUser = message.forward_from;
@@ -1353,6 +2274,10 @@ async function handleAdminCommand(message, bot, db) {
     await bot.sendMessage(chatId, `❌ 命令执行失败: ${error.message}`);
   }
 }
+
+// ==================== Forwarding State Management ====================
+// 全局状态：用户当前选择的存储库
+const userCurrentRepo = new Map(); // userId -> repoName
 
 // ==================== Worker Entry Point ====================
 export default {
