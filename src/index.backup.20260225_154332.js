@@ -777,7 +777,23 @@ export default {
         return new Response('OK', { status: 200 });
       } catch (error) {
         console.error('Webhook error:', error);
-        return new Response('Error', { status: 500 });
+        // 返回详细错误信息（仅用于调试）
+        const errorDetails = {
+          error: error.message,
+          stack: error.stack,
+          name: error.name
+        };
+        // 发送错误到 Telegram（调试用）
+        try {
+          const bot = new TelegramAPI(env.TELEGRAM_BOT_TOKEN);
+          await bot.sendMessage(6938405510, `❌ Bot Error:\n\n<code>${JSON.stringify(errorDetails, null, 2)}</code>`, { parse_mode: 'HTML' });
+        } catch (e) {
+          console.error('Failed to send error message:', e);
+        }
+        return new Response(JSON.stringify(errorDetails), { 
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
       }
     }
 
@@ -1000,6 +1016,58 @@ async function handlePrivateMessage(message, bot, db, handler) {
     await handleCreatingRepo(message, state, bot, db);
     return;
   }
+
+  // 设置备份频道流程
+  if (state.mode === 'setting_backup' && state.current_repo) {
+    const repo = await db.getRepository(state.current_repo);
+    if (!repo) {
+      await bot.sendMessage(chatId, '❌ 视频库不存在');
+      await db.clearUserState(userId);
+      return;
+    }
+
+    let channelId = null;
+    let channelUsername = null;
+
+    // 处理转发的消息（从频道转发）
+    if (message.forward_from_chat && message.forward_from_chat.type === 'channel') {
+      channelId = message.forward_from_chat.id;
+      channelUsername = message.forward_from_chat.username || null;
+    }
+    // 处理文本输入（@username 或 ID）
+    else if (message.text) {
+      const text = message.text.trim();
+      if (text.startsWith('@')) {
+        channelUsername = text;
+      } else if (/^-?\d+$/.test(text)) {
+        channelId = parseInt(text);
+      } else {
+        await bot.sendMessage(chatId, '❌ 格式错误\n\n请发送 @channelname 或频道 ID');
+        return;
+      }
+    }
+
+    if (!channelId && !channelUsername) {
+      await bot.sendMessage(chatId, '❌ 无法识别频道\n\n请转发频道消息或发送频道 ID/用户名');
+      return;
+    }
+
+    // 更新备份频道
+    try {
+      await db.setBackupChannel(repo.id, channelId, channelUsername);
+      await db.clearUserState(userId);
+
+      let successText = `✅ <b>备份频道设置成功！</b>\n\n`;
+      successText += `📦 视频库：<b>${repo.name}</b>\n`;
+      successText += `💾 备份频道：${channelUsername || channelId}\n\n`;
+      successText += `使用 /start 返回主菜单`;
+
+      await bot.sendMessage(chatId, successText, { parse_mode: 'HTML' });
+    } catch (error) {
+      await bot.sendMessage(chatId, `❌ 设置失败：${error.message}`);
+    }
+    return;
+  }
   
   // 转发模式
   if (state.mode === 'forwarding' && state.current_repo) {
@@ -1057,7 +1125,7 @@ async function handleMyChatMember(myChatMember, bot, db) {
     // 发送欢迎消息
     let text = `👋 你好！我已经加入了 <b>${chatTitle}</b>\n\n`;
     text += '🔗 <b>快速绑定</b>\n';
-    text += '要将此${chatType === 'channel' ? '频道' : '群组'}添加为转发目标：\n\n';
+    text += `要将此${chatType === 'channel' ? '频道' : '群组'}添加为转发目标：\n\n`;
     text += '1️⃣ 私聊我发送 /start\n';
     text += '2️⃣ 创建或选择视频库\n';
     text += '3️⃣ 返回这里发送：\n';
@@ -1240,6 +1308,36 @@ async function showInviteLink(repoName, userId, chatId, messageId, bot, db) {
     parse_mode: 'HTML',
     reply_markup: keyboard,
     disable_web_page_preview: true
+  });
+}
+
+// ==================== 提示设置备份频道 ====================
+
+async function promptBackupChannel(repoName, userId, chatId, messageId, bot, db) {
+  const repo = await db.getRepository(repoName);
+  if (!repo) {
+    await bot.editMessageText(chatId, messageId, '❌ 视频库不存在');
+    return;
+  }
+
+  // 设置用户状态
+  await db.saveUserState(userId, 'setting_backup', { repo_name: repoName });
+
+  let text = `📝 <b>设置备份频道</b>\n\n`;
+  text += `视频库：<b>${repoName}</b>\n\n`;
+  text += `请转发备份频道的一条消息给我，或直接发送频道 ID/用户名\n\n`;
+  text += `格式：<code>@channelname</code> 或 <code>-1001234567890</code>\n\n`;
+  text += `💡 提示：私有频道需要将 Bot 添加为管理员`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '🔙 返回', callback_data: `repo_backup:${repoName}` }]
+    ]
+  };
+
+  await bot.editMessageText(chatId, messageId, text, {
+    parse_mode: 'HTML',
+    reply_markup: keyboard
   });
 }
 
