@@ -756,39 +756,54 @@ export default {
     // Webhook endpoint
     if (url.pathname === '/webhook' && request.method === 'POST') {
       try {
+        console.log('[DEBUG] 1. Webhook received');
         const update = await request.json();
+        console.log('[DEBUG] 2. Update parsed:', update.update_id);
         
+        console.log('[DEBUG] 3. Creating TelegramAPI...');
         const bot = new TelegramAPI(env.TELEGRAM_BOT_TOKEN);
+        console.log('[DEBUG] 4. Creating Database...');
         const db = new Database(env.DB);
+        console.log('[DEBUG] 5. Creating ForwardingHandler...');
         const handler = new ForwardingHandler(bot, db);
+        console.log('[DEBUG] 6. All instances created');
         
         // 初始化数据库
+        console.log('[DEBUG] 7. Initializing tables...');
         await db.initTables();
+        console.log('[DEBUG] 8. Tables initialized');
         
         // 获取 Bot 信息
+        console.log('[DEBUG] 9. Getting bot info...');
         await bot.getMe();
+        console.log('[DEBUG] 10. Bot info retrieved');
         
         // 清理过期的待绑定记录
+        console.log('[DEBUG] 11. Cleaning up bindings...');
         await db.cleanupExpiredBindings();
+        console.log('[DEBUG] 12. Cleanup done');
         
         // 处理更新
+        console.log('[DEBUG] 13. Handling update...');
         await handleUpdate(update, bot, db, handler);
+        console.log('[DEBUG] 14. Update handled');
         
         return new Response('OK', { status: 200 });
       } catch (error) {
-        console.error('Webhook error:', error);
+        console.error('[DEBUG] ERROR caught:', error);
         // 返回详细错误信息（仅用于调试）
         const errorDetails = {
           error: error.message,
-          stack: error.stack,
+          stack: error.stack.substring(0, 500),
           name: error.name
         };
         // 发送错误到 Telegram（调试用）
         try {
           const bot = new TelegramAPI(env.TELEGRAM_BOT_TOKEN);
-          await bot.sendMessage(6938405510, `❌ Bot Error:\n\n<code>${JSON.stringify(errorDetails, null, 2)}</code>`, { parse_mode: 'HTML' });
+          const logMsg = `❌ Bot Error:\n\nError: ${errorDetails.error}\n\nName: ${errorDetails.name}\n\nStack:\n${errorDetails.stack}`;
+          await bot.sendMessage(6938405510, logMsg);
         } catch (e) {
-          console.error('Failed to send error message:', e);
+          console.error('[DEBUG] Failed to send error message:', e);
         }
         return new Response(JSON.stringify(errorDetails), { 
           status: 500,
@@ -1014,58 +1029,6 @@ async function handlePrivateMessage(message, bot, db, handler) {
   // 创建视频库流程
   if (state.mode === 'creating_repo') {
     await handleCreatingRepo(message, state, bot, db);
-    return;
-  }
-
-  // 设置备份频道流程
-  if (state.mode === 'setting_backup' && state.current_repo) {
-    const repo = await db.getRepository(state.current_repo);
-    if (!repo) {
-      await bot.sendMessage(chatId, '❌ 视频库不存在');
-      await db.clearUserState(userId);
-      return;
-    }
-
-    let channelId = null;
-    let channelUsername = null;
-
-    // 处理转发的消息（从频道转发）
-    if (message.forward_from_chat && message.forward_from_chat.type === 'channel') {
-      channelId = message.forward_from_chat.id;
-      channelUsername = message.forward_from_chat.username || null;
-    }
-    // 处理文本输入（@username 或 ID）
-    else if (message.text) {
-      const text = message.text.trim();
-      if (text.startsWith('@')) {
-        channelUsername = text;
-      } else if (/^-?\d+$/.test(text)) {
-        channelId = parseInt(text);
-      } else {
-        await bot.sendMessage(chatId, '❌ 格式错误\n\n请发送 @channelname 或频道 ID');
-        return;
-      }
-    }
-
-    if (!channelId && !channelUsername) {
-      await bot.sendMessage(chatId, '❌ 无法识别频道\n\n请转发频道消息或发送频道 ID/用户名');
-      return;
-    }
-
-    // 更新备份频道
-    try {
-      await db.setBackupChannel(repo.id, channelId, channelUsername);
-      await db.clearUserState(userId);
-
-      let successText = `✅ <b>备份频道设置成功！</b>\n\n`;
-      successText += `📦 视频库：<b>${repo.name}</b>\n`;
-      successText += `💾 备份频道：${channelUsername || channelId}\n\n`;
-      successText += `使用 /start 返回主菜单`;
-
-      await bot.sendMessage(chatId, successText, { parse_mode: 'HTML' });
-    } catch (error) {
-      await bot.sendMessage(chatId, `❌ 设置失败：${error.message}`);
-    }
     return;
   }
   
@@ -1308,36 +1271,6 @@ async function showInviteLink(repoName, userId, chatId, messageId, bot, db) {
     parse_mode: 'HTML',
     reply_markup: keyboard,
     disable_web_page_preview: true
-  });
-}
-
-// ==================== 提示设置备份频道 ====================
-
-async function promptBackupChannel(repoName, userId, chatId, messageId, bot, db) {
-  const repo = await db.getRepository(repoName);
-  if (!repo) {
-    await bot.editMessageText(chatId, messageId, '❌ 视频库不存在');
-    return;
-  }
-
-  // 设置用户状态
-  await db.saveUserState(userId, 'setting_backup', { repo_name: repoName });
-
-  let text = `📝 <b>设置备份频道</b>\n\n`;
-  text += `视频库：<b>${repoName}</b>\n\n`;
-  text += `请转发备份频道的一条消息给我，或直接发送频道 ID/用户名\n\n`;
-  text += `格式：<code>@channelname</code> 或 <code>-1001234567890</code>\n\n`;
-  text += `💡 提示：私有频道需要将 Bot 添加为管理员`;
-
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '🔙 返回', callback_data: `repo_backup:${repoName}` }]
-    ]
-  };
-
-  await bot.editMessageText(chatId, messageId, text, {
-    parse_mode: 'HTML',
-    reply_markup: keyboard
   });
 }
 
