@@ -1057,7 +1057,7 @@ async function handleMyChatMember(myChatMember, bot, db) {
     // 发送欢迎消息
     let text = `👋 你好！我已经加入了 <b>${chatTitle}</b>\n\n`;
     text += '🔗 <b>快速绑定</b>\n';
-    text += '要将此${chatType === 'channel' ? '频道' : '群组'}添加为转发目标：\n\n';
+    text += '要将此' + (chatType === 'channel' ? '频道' : '群组') + '添加为转发目标：\n\n';
     text += '1️⃣ 私聊我发送 /start\n';
     text += '2️⃣ 创建或选择视频库\n';
     text += '3️⃣ 返回这里发送：\n';
