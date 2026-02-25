@@ -332,11 +332,66 @@ async function initializeDatabaseTables(db) {
         metadata TEXT
       )`,
       
-      // 索引
+      // ======== 转发系统表 ========
+      
+      // 存储库表
+      `CREATE TABLE IF NOT EXISTS forward_repositories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        created_by INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER
+      )`,
+      
+      // 转发目标表
+      `CREATE TABLE IF NOT EXISTS forward_targets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repository_id INTEGER NOT NULL,
+        target_chat_id INTEGER NOT NULL,
+        target_type TEXT CHECK(target_type IN ('channel', 'group', 'private')),
+        enabled INTEGER DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (repository_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
+      )`,
+      
+      // 消息记录表
+      `CREATE TABLE IF NOT EXISTS forwarded_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repository_id INTEGER NOT NULL,
+        source_user_id INTEGER NOT NULL,
+        source_message_id INTEGER,
+        message_type TEXT,
+        forwarded_to TEXT,
+        forwarded_at INTEGER NOT NULL,
+        metadata TEXT,
+        FOREIGN KEY (repository_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
+      )`,
+      
+      // 权限表
+      `CREATE TABLE IF NOT EXISTS forward_permissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repository_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        role TEXT CHECK(role IN ('admin', 'contributor', 'viewer')) DEFAULT 'contributor',
+        granted_by INTEGER NOT NULL,
+        granted_at INTEGER NOT NULL,
+        UNIQUE(repository_id, user_id),
+        FOREIGN KEY (repository_id) REFERENCES forward_repositories(id) ON DELETE CASCADE
+      )`,
+      
+      // 索引 - 验证系统
       `CREATE INDEX IF NOT EXISTS idx_verifications_chat ON verifications(chat_id)`,
       `CREATE INDEX IF NOT EXISTS idx_verifications_status ON verifications(status)`,
       `CREATE INDEX IF NOT EXISTS idx_detection_user ON bot_detection_log(user_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_detection_chat ON bot_detection_log(chat_id)`
+      `CREATE INDEX IF NOT EXISTS idx_detection_chat ON bot_detection_log(chat_id)`,
+      
+      // 索引 - 转发系统
+      `CREATE INDEX IF NOT EXISTS idx_forward_targets_repo ON forward_targets(repository_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_forwarded_messages_repo ON forwarded_messages(repository_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_forwarded_messages_user ON forwarded_messages(source_user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_forward_permissions_repo ON forward_permissions(repository_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_forward_permissions_user ON forward_permissions(user_id)`
     ];
 
     // 执行所有建表语句
@@ -344,7 +399,7 @@ async function initializeDatabaseTables(db) {
       await db.prepare(sql).run();
     }
     
-    console.log('✅ Database tables initialized successfully');
+    console.log('✅ Database tables initialized successfully (verification + forwarding)');
     return true;
   } catch (error) {
     console.error('❌ Failed to initialize database tables:', error);
@@ -848,12 +903,36 @@ async function handlePrivateMessage(message, bot, db) {
 • /check - 检测自己账号
 • 转发消息 - 检测其他用户
 
-<b>3. 验证类型:</b>
+<b>3. 内容转发系统:</b>
+<b>存储库管理</b>
+• /repo_create &lt;名称&gt; &lt;描述&gt; - 创建存储库
+• /repo_list - 列出所有存储库
+• /repo_info &lt;名称&gt; - 查看详情
+• /repo_delete &lt;名称&gt; - 删除存储库
+
+<b>转发目标</b>
+• /target_add &lt;库&gt; &lt;chat_id&gt; - 添加转发目标
+• /target_remove &lt;库&gt; &lt;chat_id&gt; - 移除目标
+• /target_list &lt;库&gt; - 列出目标
+• /target_toggle &lt;库&gt; &lt;chat_id&gt; - 启用/禁用
+
+<b>权限管理</b>
+• /perm_grant &lt;库&gt; &lt;user&gt; &lt;role&gt; - 授权
+• /perm_revoke &lt;库&gt; &lt;user&gt; - 撤销
+• /perm_list &lt;库&gt; - 列出授权
+
+<b>转发操作</b>
+• /use &lt;库名&gt; - 开启自动转发
+• /use off - 关闭自动转发
+• /forwarded_stats &lt;库&gt; - 查看统计
+• /forwarded_recent &lt;库&gt; - 最近记录
+
+<b>4. 验证类型:</b>
 • math - 数学题验证
 • button - 按钮选择
 • captcha - 验证码输入
 
-<b>4. 机器人检测维度 (10项):</b>
+<b>5. 机器人检测维度 (10项):</b>
 • 官方 bot 标记
 • 垃圾关键词
 • 用户名模式
@@ -861,6 +940,12 @@ async function handlePrivateMessage(message, bot, db) {
 • 数字/无效名称
 • 无头像/用户名
 • 新账号检测
+
+💡 <b>转发系统使用示例:</b>
+1. 创建存储库: /repo_create news 新闻频道
+2. 添加目标: /target_add news @your_channel
+3. 开启转发: /use news
+4. 发送内容即可自动转发！
 
 需要更多帮助？查看项目文档:
 https://github.com/ovws/oizhibot
